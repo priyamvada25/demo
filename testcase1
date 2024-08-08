@@ -1,10 +1,33 @@
-nonZeroBuyOutAmt = () =>{
+import React from 'react';
+import { render } from '@testing-library/react';
+import MyComponent from './MyComponent';
 
-    let { lineInfo } = this.props;
-    console.log('>>>> nonzer11o'+this.props.lineInfo);
-    let edgeUpAmt = lineInfo && lineInfo[0]?.itemsInfo[0]?.cartItems?.cartItem?.filter(item => {
-      return item.itemCode === "EDGEUPPMT"
-    });
-    console.log('PRIYA >>>>'+edgeUpAmt[0]);
-    return edgeUpAmt && edgeUpAmt[0].itemPrice > 0;
-  }
+test('renders Default Content when channel does not contain INDIRECT', () => {
+  const props = {
+    channel: 'Some OTHER Channel',
+    element: { id: 'buyOutPaymentReceipt' },
+    orderConfirmationData: {
+      data: {
+        getConfirmationPage: {
+          'buyOutPaymentReceipt': { isEdgeUp: true }
+        }
+      }
+    },
+    lineInfo: {
+      0: {
+        itemsInfo: [
+          {
+            cartItems: {
+              cartItem: [
+                { itemCode: 'EDGEUPPMT', itemPrice: 100 }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  };
+
+  const { getByText } = render(<MyComponent {...props} />);
+  expect(getByText('Default Content')).toBeInTheDocument();
+});
