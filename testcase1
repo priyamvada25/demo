@@ -1,0 +1,10 @@
+nonZeroBuyOutAmt = () =>{
+
+    let { lineInfo } = this.props;
+    console.log('>>>> nonzer11o'+this.props.lineInfo);
+    let edgeUpAmt = lineInfo && lineInfo[0]?.itemsInfo[0]?.cartItems?.cartItem?.filter(item => {
+      return item.itemCode === "EDGEUPPMT"
+    });
+    console.log('PRIYA >>>>'+edgeUpAmt[0]);
+    return edgeUpAmt && edgeUpAmt[0].itemPrice > 0;
+  }
