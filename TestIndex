@@ -1,0 +1,34 @@
+import { shallow } from 'enzyme';  // or import { render } from '@testing-library/react';
+import MyComponent from './MyComponent'; // replace with the actual component name and path
+import domService from './domService';   // replace with the actual domService path
+
+describe('MyComponent', () => {
+  it('should call history.navigatePage with correct path when the refresh query param is present, the user is not new, and the path is "indirect-order-confirmation"', () => {
+    // Mocking getQueryParamByName to return non-null value
+    const getQueryParamByName = jest.spyOn(domService, 'getQueryParamByName').mockReturnValue('true');
+    
+    // Mocking sessionStorage.getItem to return the desired path
+    sessionStorage.setItem('path', '/some-path/indirect-order-confirmation');
+    
+    // Mocking removeQueryParamsFromURL
+    const removeQueryParamsFromURL = jest.spyOn(domService, 'removeQueryParamsFromURL').mockImplementation(() => {});
+
+    // Mocking history.navigatePage
+    const navigatePage = jest.fn();
+
+    // Rendering the component
+    const wrapper = shallow(
+      <MyComponent 
+        history={{ navigatePage }} 
+        isNewCustomer={false} // Ensuring the user is not new
+      />
+    );
+    
+    // Expect navigatePage to have been called with the correct path
+    expect(navigatePage).toHaveBeenCalledWith(`${ domService.getUIContextPath() }/indirect-order-confirmation`);
+    
+    // Clean up mocks
+    getQueryParamByName.mockRestore();
+    removeQueryParamsFromURL.mockRestore();
+  });
+});
