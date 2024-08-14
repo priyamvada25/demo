@@ -1,0 +1,10 @@
+let edgupamt = lineInfo 
+    && lineInfo.length > 0 
+    && lineInfo[0].itemsInfo 
+    && lineInfo[0].itemsInfo.length > 0 
+    && lineInfo[0].itemsInfo[0].cartItems 
+    && lineInfo[0].itemsInfo[0].cartItems.cartItem 
+    && lineInfo[0].itemsInfo[0].cartItems.cartItem.length > 0 
+    && lineInfo[0].itemsInfo[0].cartItems.cartItem.find(item => item.itemCode === "EDGEUPPMT");
+
+return edgupamt && edgupamt.itemPrice > 0;
