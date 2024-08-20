@@ -1,0 +1,124 @@
+// Import necessary modules
+import { getQueryParamByName } from 'somewhere'; // adjust import as necessary
+import domService from 'domService'; // adjust import as necessary
+
+// Mock sessionStorage
+const mockSessionStorage = {
+    getItem: jest.fn()
+};
+
+// Mock history object
+const mockHistory = {
+    navigatePage: jest.fn()
+};
+
+// Mock domService functions
+domService.removeQueryParamsFromURL = jest.fn();
+domService.getUIContextPath = jest.fn(() => "/some-ui-context-path");
+
+// Mock the props object
+const mockProps = {
+    history: mockHistory
+};
+
+// Mock function to replace getQueryParamByName
+jest.mock('somewhere', () => ({
+    getQueryParamByName: jest.fn()
+}));
+
+beforeEach(() => {
+    jest.clearAllMocks(); // Clear mocks before each test
+    Object.defineProperty(window, 'sessionStorage', {
+        value: mockSessionStorage
+    });
+});
+
+test('should navigate to indirect-order-confirmation.html when conditions are met', () => {
+    getQueryParamByName.mockReturnValue("someValue");
+    mockSessionStorage.getItem.mockImplementation((key) => {
+        if (key === 'channel') return 'OMNI-INDIRECT';
+        if (key === 'path') return '/some-path/indirect-order-confirmation.html';
+    });
+
+    // Execute the logic
+    if (getQueryParamByName("refresh") !== null && 
+        !isNewCustomer && 
+        sessionStorage.getItem('channel')?.includes("OMNI-INDIRECT") && 
+        sessionStorage.getItem("path")) {
+
+        let path = sessionStorage.getItem("path");
+        let page = path.substring(path.lastIndexOf("/") + 1);
+
+        if (page === "indirect-order-confirmation.html") {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(`${domService.getUIContextPath()}/${page}`);
+        } else {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(page);
+        }
+    }
+
+    // Assertions
+    expect(domService.removeQueryParamsFromURL).toHaveBeenCalled();
+    expect(mockProps.history.navigatePage).toHaveBeenCalledWith("/some-ui-context-path/indirect-order-confirmation.html");
+});
+
+test('should navigate to other pages when path is not indirect-order-confirmation.html', () => {
+    getQueryParamByName.mockReturnValue("someValue");
+    mockSessionStorage.getItem.mockImplementation((key) => {
+        if (key === 'channel') return 'OMNI-INDIRECT';
+        if (key === 'path') return '/some-path/other-page.html';
+    });
+
+    // Execute the logic
+    if (getQueryParamByName("refresh") !== null && 
+        !isNewCustomer && 
+        sessionStorage.getItem('channel')?.includes("OMNI-INDIRECT") && 
+        sessionStorage.getItem("path")) {
+
+        let path = sessionStorage.getItem("path");
+        let page = path.substring(path.lastIndexOf("/") + 1);
+
+        if (page === "indirect-order-confirmation.html") {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(`${domService.getUIContextPath()}/${page}`);
+        } else {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(page);
+        }
+    }
+
+    // Assertions
+    expect(domService.removeQueryParamsFromURL).toHaveBeenCalled();
+    expect(mockProps.history.navigatePage).toHaveBeenCalledWith("other-page.html");
+});
+
+test('should not navigate if query param refresh is not present', () => {
+    getQueryParamByName.mockReturnValue(null);
+    mockSessionStorage.getItem.mockImplementation((key) => {
+        if (key === 'channel') return 'OMNI-INDIRECT';
+        if (key === 'path') return '/some-path/indirect-order-confirmation.html';
+    });
+
+    // Execute the logic
+    if (getQueryParamByName("refresh") !== null && 
+        !isNewCustomer && 
+        sessionStorage.getItem('channel')?.includes("OMNI-INDIRECT") && 
+        sessionStorage.getItem("path")) {
+
+        let path = sessionStorage.getItem("path");
+        let page = path.substring(path.lastIndexOf("/") + 1);
+
+        if (page === "indirect-order-confirmation.html") {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(`${domService.getUIContextPath()}/${page}`);
+        } else {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(page);
+        }
+    }
+
+    // Assertions
+    expect(domService.removeQueryParamsFromURL).not.toHaveBeenCalled();
+    expect(mockProps.history.navigatePage).not.toHaveBeenCalled();
+});
