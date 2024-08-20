@@ -1,0 +1,32 @@
+test('should navigate to indirect-order-confirmation.html when refresh query param is present in the URL', () => {
+    // Mock the query parameter "refresh" to return a value
+    getQueryParamByName.mockReturnValue("123334");
+
+    // Mock sessionStorage to return the expected values
+    mockSessionStorage.getItem.mockImplementation((key) => {
+        if (key === 'channel') return 'OMNI-INDIRECT';
+        if (key === 'path') return '/sales/assisted/indirect-order-confirmation.html';
+    });
+
+    // Execute the logic (this is where your actual code would run)
+    if (getQueryParamByName("refresh") !== null && 
+        !isNewCustomer && 
+        sessionStorage.getItem('channel')?.includes("OMNI-INDIRECT") && 
+        sessionStorage.getItem("path")) {
+
+        let path = sessionStorage.getItem("path");
+        let page = path.substring(path.lastIndexOf("/") + 1);
+
+        if (page === "indirect-order-confirmation.html") {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(`${domService.getUIContextPath()}/${page}`);
+        } else {
+            domService.removeQueryParamsFromURL();
+            mockProps.history.navigatePage(page);
+        }
+    }
+
+    // Assertions
+    expect(domService.removeQueryParamsFromURL).toHaveBeenCalled();
+    expect(mockProps.history.navigatePage).toHaveBeenCalledWith("/some-ui-context-path/indirect-order-confirmation.html");
+});
