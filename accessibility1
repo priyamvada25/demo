@@ -1,0 +1,1912 @@
+import React, { Component, lazy, Suspense } from 'react';
+import Icon from '@vds/icons';
+import { Modal, ModalTitle, ModalBody } from '@vds/modals';
+import { DropdownSelect } from '@vds/selects-3.4.4';
+import moment from 'moment';
+import { Button } from '@vds/buttons';
+import { isEqual, isEmpty, get } from 'lodash';
+import { Label } from '../../components/Reusable/Label/Label';
+import { isAlphaNumeric, isNumeric, isAlphaNumericAndSpace, isValidEmail, isNumAndStar } from '../../utils/validation';
+import { isIpad, isAcssProd, isEqpOrdSearchChangesFFlag } from '../../services/dom.service';
+import { getDateFormat, clearSessionForPrepayOrder, isNullOrEmpty, inIframe } from '../../utils/common_functions';
+import Trace from '../../services/nrServices';
+import {
+    intialState,
+    cleanInitialState,
+    AcssOrderSearchList,
+    InsideSalesOrderSearchList,
+    FEDEX_TRACKING_URL,
+    UPS_TRACKING_URL,
+    USPS_TRACKING_URL,
+    A1_TRACKING_URL,
+    DELIV_TRACKING_URL,
+    ACSS_ORDER_SEARCH_CHANNEL,
+} from '../Order/constants';
+import OrderTable from './AcssOrderSearchTable';
+import '../Order/containers/order.scss';
+import '../Order/OrderPreview/ComponentStyles/OrderRemarksInfo.scss';
+import OrderRemarksInfo from '../Order/OrderPreview/Components/OrderRemarksInfo';
+import PrebackCancel from '../Order/prebackModify/PrebackCancel/PrebackCancel';
+import * as DOMPurify from 'dompurify';
+import './AcssOrderSearch.scss';
+import ActivationStatusModal from '../../../src/pages/Order/components/ActivationStatusModal';
+import AcssSelectApplication from './AcssSelectApplication';
+import { updateUserParam } from '../CoverageCheckV2/actions';
+import { getCookie } from '../../services/dom.service';
+
+import {
+    CARE_QUICKACCESSORY_PATH,
+    CUSTOMER_360_PATH,
+    B360_QUOTE_PATH,
+    RF_REFUND_PATH,
+    POSTMESSAGE_ORIGIN,
+    getApplicationRedirectUrls,
+    getNonNsaOrderUrl,
+    B360_BULK_PATH,
+    ENV_OVERRIDE_SOE,
+    ORDER_STATUS_TRACKER,
+    getB360ReadOrderUrl,
+} from '../../services/UrlMapperService';
+import AcssGenericOrderPreview from './AcssGenericOrderPreview';
+import SearchOrder from '../Order/components/AcssSearchOrder';
+import AcssPrebackOrder from '../Order/components/AcssPrebackOrderSearch';
+import { Loader } from '@vds/loaders';
+import CustomerId from '../Order/components/AcssCustomerId';
+import GlobalLocationRsaToken from './GlobalLocationRsaToken';
+import PreBackOrderPreview from '../Order/OrderPreview/Components/PreBackOrderPreview';
+import { createStructuredSelector } from 'reselect';
+import { getPrebackOrderDetails } from '../Order/selectors';
+import { connect } from 'react-redux';
+import { compose } from 'redux';
+import { getOrderDetailsRequest, setCancelPrebackOrderSuccess } from '../Order/actions';
+import { Table, TableHead, TableHeader, TableBody, TableRow, Cell } from '@vds/tables';
+import { refreshSession } from '../../utils/glassbox_utils';
+import DigitalCart from '../Order/components/b2b/DigitalCart';
+const UswinSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/UswinSearch'));
+const AcssUswinSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/AcssUswinSearch'));
+const MdnSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/AcssMdnSearch'));
+const PaypalSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/PaypalSearch'));
+const DeviceIdSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/DeviceIdSearch'));
+const CreditCardNumSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/CreditCardNumSearch'));
+const InternetOrderSearch = lazy(() => import(/*webpackChunkName: "Searches-soecomponent"*/ '../Order/components/InternetOrderSearch'));
+
+let locationCode = sessionStorage.getItem('location');
+const key = 'order';
+
+// Note: Remove const UswinSearch import at the time of removing Feature Flag (isEqpOrdSearchChangesFFlag())
+// and keep const AcssUswinSearch
+const AcssUswinSearchComp = isEqpOrdSearchChangesFFlag() ? AcssUswinSearch : UswinSearch;
+
+class AcssOrderSearch extends Component {
+    constructor(props) {
+        super(props);
+        const temp = this.props.orderSearchState ? this.props.orderSearchState : intialState; //Initial state object is declared in constants file
+        const { source, confirmationNumber, orderNumber, locationCode } = this.props.orderSearchParams || {};
+        const { searchBy = 'Order', searchOrderBy = '', criteria = {} } = this.getSearchCriteria();
+        this.removeSearchCriteria();
+        this.isDark = this.props?.acssTheme?.isDark || false;
+        this.state = {
+            ...temp,
+            searchBy: source || searchBy || 'Order',
+            searchOrderBy: searchOrderBy || 'Order number',
+            showSearchResults: false,
+            showRemarks: false,
+            showOrderDetails: true,
+            showOrderPreview: false,
+            showRsaTokenValidation: false,
+            uswinLocation: locationCode || this.props.locationCode,
+            showComboOrder: false,
+            orderNumber2: '',
+            locationCode2: '',
+            showModal: false,
+            customerId: '',
+            subAcctNum: '',
+            customerIDErr: '',
+            activationOrderNum: '',
+            activationLocation: '',
+            custAccountNumber: '',
+            confirmationNo: confirmationNumber || '',
+            orderLocationTabClicked: false,
+            confirmationNoTwo: '',
+            orderNumber: orderNumber || temp.orderNumber || null,
+            showLocationDetails: false,
+            showPrebackOrderDetails: false,
+            previousUswinLocation: '',
+            cancelConfirmationOrders: [],
+            showFFLTrackingInfo: false,
+            showRsaSuccess: false,
+            source: source,
+            noRemarks: [
+                {
+                    description: 'No Remarks Found To Display',
+                    itemCode: null,
+                    seqNum: null,
+                    timestamp: '',
+                    userId: '',
+                },
+            ],
+            ...criteria,
+            disableSearchBtn: false,
+            email: '',
+            deviceId: '',
+            payment: '',
+        };
+        this.orderTableRef = React.createRef();
+        this.handleClearButton = this.handleClearButton.bind(this);
+    }
+
+    componentDidMount() {
+        if (this.state.source === 'Pre/Back order' && !isNullOrEmpty(this.state.confirmationNo)) this.handleClickEvent();
+    }
+
+    showTrackShipment = () => {
+        this.setState({ showFFLTrackingInfo: true });
+    };
+
+    buildTrackingNumberUrl = (carrier, trackingNo) => {
+        if (isNullOrEmpty(carrier) || isNullOrEmpty(trackingNo)) return <span dangerouslySetInnerHTML={{ __html: 'No Tracking Data Available' }} />;
+        let trackingUrl = '';
+        if (trackingNo?.length > 0 && !isNullOrEmpty(carrier)) {
+            if (/ups/gi.test(carrier)) trackingUrl = UPS_TRACKING_URL;
+            else if (/fed/gi.test(carrier)) trackingUrl = FEDEX_TRACKING_URL;
+            else if (/usps|ECONOMYSHP/gi.test(carrier)) trackingUrl = USPS_TRACKING_URL;
+            else if (/A1/gi.test(carrier)) trackingUrl = A1_TRACKING_URL;
+            else if (/deliv|SDD|SAMEDAY|SDD_SAMEDAY/gi.test(carrier)) trackingUrl = DELIV_TRACKING_URL;
+            else trackingUrl = '';
+
+            let carrierTracking = carrier + '_' + trackingNo;
+            if (!isNullOrEmpty(trackingUrl)) {
+                trackingUrl = trackingUrl.replace('{trackingNum}', trackingNo);
+                carrierTracking = carrierTracking.replace(carrierTracking, `<a target="_blank" className="blueanchor" href='${trackingUrl}'>${carrierTracking}</a>`);
+            } else {
+                carrierTracking = carrierTracking.replace(carrierTracking, `<a target="_blank"'>${carrier}_${trackingNo}_No Tracking Data Available</a>`);
+            }
+
+            return (
+                <>
+                    <span dangerouslySetInnerHTML={{ __html: carrierTracking }} />
+                </>
+            );
+        } else {
+            return (
+                <>
+                    <span dangerouslySetInnerHTML={{ __html: 'No Tracking Data Available' }} />
+                </>
+            );
+        }
+    };
+
+    handleViewData = (val, obj) => {
+        if (val === 'preorderdetails') {
+            this.setState({ showPrebackOrderDetails: false });
+            return;
+        }
+
+        if (this.state.showRsaTokenValidation && this.state.orderLocationTabClicked) {
+            if (this.state.showRsaTokenValidation && val === 'rsaTokenValidation') {
+                this.setState({
+                    showRsaTokenValidation: false,
+                    orderLocationTabClicked: false,
+                });
+            }
+
+            return;
+        }
+
+        if (this.state.showRsaSuccess && val === 'rsaTokenSuccess') {
+            this.setState({ showRsaSuccess: false });
+            return;
+        }
+
+        const { order } = this.props.order;
+        const { selectedRow = 0 } = this.state;
+        if (!!obj) {
+            this.setState({ orderNumber: obj.orderNumber, uswinLocation: obj.location, selectedRow: obj.indexkey }, () => {
+                console.log('order state updated');
+            });
+        }
+        let callApi = false;
+        const staticObj = { showOrderDetails: false, showOrderPreview: false, showRemarks: false };
+        if (val === 'remarks') {
+            if (!this.state.showRemarks) {
+                callApi = true;
+                this.setState({ ...staticObj, showRemarks: true });
+            } else {
+                this.setState({ ...staticObj, showOrderDetails: true });
+            }
+
+            if (this.state.showRemarks) {
+                this.setState({ showFFLTrackingInfo: false });
+            }
+        } else {
+            if (!this.state.showOrderPreview) {
+                callApi = true;
+                this.setState({ ...staticObj, showOrderPreview: true });
+            } else {
+                this.setState({ ...staticObj, showOrderDetails: true });
+            }
+        }
+
+        if (order?.length && callApi && val === 'remarks') {
+            const billAcctNum = order[selectedRow].billAcctNum;
+            this.props.loadUsiwnOrderPreviewReq({
+                orderNum: !!obj ? obj.orderNumber : this.state.orderNumber,
+                locationCode:
+                    this.state.searchBy === 'Paypal' || this.state.searchBy === 'Device ID' || this.state.searchBy === 'Credit card number'
+                        ? order[selectedRow]?.locationCode
+                        : !!obj
+                        ? obj.location
+                        : this.state.uswinLocation,
+                orderType: this.state.orderType === 'Other(CP)' ? 'CP' : this.state.orderType,
+                mobileNumber: order[selectedRow].mobileNumber,
+                accountNumber: order[selectedRow].accountNumber,
+                billAcctNum: billAcctNum > 9 ? `000${billAcctNum}` : `0000${billAcctNum}`,
+            });
+        }
+    };
+
+    expandCollapse = () => {
+        const { isExpand } = this.state;
+        this.setState({
+            isExpand: !isExpand,
+            isBelow: true,
+        });
+    };
+
+    shouldComponentUpdate(nextProps, nextState) {
+        const uswin = nextProps.orderSearchState && nextProps.orderSearchState.uswin ? nextProps.orderSearchState.uswin : nextProps.userId;
+        if (!isEqual(this.props.userId, nextProps.userId)) {
+            if (nextProps.userId) {
+                if (nextProps.userId.length > 0) {
+                    this.setState(
+                        {
+                            uswin: uswin,
+                            isDisable: uswin.length > 0 ? false : true,
+                        },
+                        () => {
+                            this.forceUpdate();
+                        }
+                    );
+                }
+            }
+        }
+        if (!isEqual(this.props.order.order, nextProps.order.order)) {
+            if (nextProps.order.order) {
+                if (nextProps.order.order.length === 1 || nextProps.order.order.length > 1) {
+                    this.setState({ selectedRow: 0 });
+                }
+
+                // initially expand on order data populate for small screens.
+                // customer can play with expand/collapse using arrow icon(on click event which handles collapse)
+                if (nextProps.order.order.length >= 1 && this.props.order.order.length === 0 && window.outerHeight < 1080) {
+                    this.expandCollapse();
+                }
+            }
+        }
+
+        return true;
+    }
+
+    componentDidUpdate(prevProps) {
+        const { prebackSuccess } = this.props.preback;
+        const cpqcartDetailsobj = { cpqCartId: '', cpqCartVersionId: '' };
+        if (this.props.b360Order !== prevProps.b360Order) {
+            const orderRes = this.props.b360Order;
+            const { orderNumber, orderLocation, cpqcartDetails = {} } = !isEmpty(orderRes) && orderRes; // cPQCartDetails
+            const { cpqCartId = '', cpqCartVersionId = '' } = !isEmpty(cpqcartDetails) ? cpqcartDetails : cpqcartDetailsobj;
+            const { cartId } = !isEmpty(orderRes) && orderRes;
+            const url = CUSTOMER_360_PATH;
+            let nextScreenName = 'cust360_search';
+            const channelId = 'OMNI-CARE';
+            const reqUrl = {
+                nextScreen: url,
+                cust360: true,
+                name: nextScreenName,
+                source: 'ordersearch',
+            };
+            const cust360Req = {
+                header: {},
+                ignoreCache: false,
+                optionalLoginUserDetails: {
+                    CART_ID: cpqCartId || cartId,
+                    MODULE_NAME: 'SHOP',
+                    LOCATION_CODE: orderLocation,
+                    ORDER_NUMBER: orderNumber,
+                    ACCOUNT_NUMBER: '',
+                    SYSTEM_ID: 'ACSS',
+                    IS_SOE: true,
+                    CART_VERSION_ID: cpqCartVersionId,
+                    COSTCO_B360_FLOW: false,
+                    SALES_REPID: orderRes.repId,
+                    LAUNCHED_FROM: 'VIEW_ORDER_B360',
+                    salesRepId: orderRes.repId,
+                    wfhStatus: true,
+                    VISITOR_ID: 'T42169476',
+                    IS_RFEX_FLOW: false,
+                },
+            };
+
+            this.props.updateUserParam({ cust360Req, reqUrl, channelId });
+        }
+
+        if (this.props.updatedUserParam !== prevProps.updatedUserParam) {
+            if (this.props.updatedUserParam && this.props.updatedUserParam.data && this.props.userParam.reqUrl && /ordersearch/i.test(this.props.userParam.reqUrl.source)) {
+                // check successful/data
+                const reqSuccess = this.props.updatedUserParam && this.props.updatedUserParam.data && this.props.updatedUserParam.data.status == '1' ? true : false;
+                const reqData = this.props.userParam && this.props.userParam.reqUrl ? this.props.userParam.reqUrl : null;
+                // check b360 vs cust360 (and advancedSearch)
+                const isb360Quote = reqSuccess && reqData && reqData.b360quote ? true : false;
+
+                // set tab name/url
+                let screenName = isb360Quote ? 'order' : 'account';
+                let url = isb360Quote ? B360_QUOTE_PATH : CUSTOMER_360_PATH;
+                url = reqData.b2bOrderDetails ? reqData.nextScreen : url;
+
+                const isb360Bulk = reqSuccess && reqData && reqData.b360bulk ? true : false;
+                if (isb360Bulk) {
+                    screenName = 'order';
+                    url = B360_BULK_PATH;
+                }
+
+                const b2bOrderDetailsVal = reqData.b2bOrderDetails ? 'B2B_ORDERDETAILS' : 'CUST360';
+                refreshSession(`LP_${isb360Quote ? 'B360' : b2bOrderDetailsVal}_SEARCH`, true);
+
+                if (isIpad()) {
+                    let shellParams = {
+                        name: screenName,
+                        path: '',
+                        replace: 'true',
+                        params: `rawurl:${url}`,
+                    };
+                    //   this.props.executeShellFunction('Shell', 'showScreen', 'none', shellParams);
+                } else {
+                    // redirect URL on desktop
+                    window.open(DOMPurify.sanitize(url), '_blank');
+                }
+            } else if (this.props.updatedUserParam?.data && /orderstatustracker/i.test(this.props.userParam?.reqUrl?.source)) {
+                this.setState({ isLoading: false });
+                try {
+                    const reqSuccess = this.props.updatedUserParam?.data?.status == '1' ? true : false;
+                    const screenName = 'order';
+                    let url = ORDER_STATUS_TRACKER;
+                    if (reqSuccess === true) {
+                        if (isIpad()) {
+                            let shellParams = {
+                                name: screenName,
+                                path: '',
+                                replace: 'true',
+                                params: `rawurl:${url}`,
+                            };
+                            this.props.executeShellFunction('Shell', 'showScreen', 'none', shellParams);
+                        } else {
+                            // redirect URL on desktop
+                            if (inIframe()) {
+                                const message = {
+                                    iframe: screenName,
+                                    path: '',
+                                    replace: true,
+                                    url: url,
+                                    //url: URL
+                                };
+                                let target = window.parent;
+                                target.postMessage(message, POSTMESSAGE_ORIGIN);
+                            } else {
+                                window.open(DOMPurify.sanitize(url), '_blank');
+                            }
+                        }
+                    }
+                } catch (e) {
+                    this.props.addAppMessage(`Problem with Order Status Tracker Navigation`, 'warning', true, true);
+                }
+            }
+        }
+
+        if (this.props.order.salesRepOrderDetails !== prevProps.order.salesRepOrderDetails) {
+            const { salesRepOrderDetails = [] } = this.props.order;
+            const aceOrderTelRepLocSearchDetailsList = !isEmpty(salesRepOrderDetails) && salesRepOrderDetails.aceOrderTelRepLocSearchDetailsList;
+            if (/sales id/i.test(this.state.searchBy)) {
+                this.setState({
+                    selectedRow: 0,
+                    orderNumber: !isEmpty(aceOrderTelRepLocSearchDetailsList) && aceOrderTelRepLocSearchDetailsList[0].orderNum,
+                });
+            }
+        }
+
+        if (this.props.cookieInfo !== prevProps.cookieInfo) {
+            if (this.props.cookieInfo && this.props.cookieInfo.url) {
+                const { url, soeguivalue, soeguisubkey } = this.props.cookieInfo;
+                let readOrderUrl = url;
+                if (soeguivalue && soeguisubkey) {
+                    readOrderUrl = readOrderUrl + '&nsasoeguivalue=' + soeguivalue + '&nsasoeguisubkey=' + soeguisubkey;
+                }
+                if (isIpad()) {
+                    let shellParams = {
+                        name: 'order',
+                        path: '',
+                        replace: 'true',
+                        params: `rawurl:${url}`,
+                    };
+                    this.props.executeShellFunction('Shell', 'showScreen', 'none', shellParams);
+                } else {
+                    // close order tab if open
+                    if (window?.parent?.orderTabOpened?.closed) {
+                        window.parent.orderTabOpened.close();
+                    }
+
+                    // open new order tab with new jwt
+                    const soeguisubkey = sessionStorage.getItem('nsasoeguisubkey');
+                    const soeguivalue = sessionStorage.getItem('nsasoeguivalue');
+                    let soeSubkey = sessionStorage.getItem('soeguisubkey');
+                    soeSubkey = soeSubkey && soeSubkey.substring(0, 15);
+                    let nsaOrderUrl = url;
+                    if (soeguisubkey && soeguivalue) {
+                        nsaOrderUrl += `&nsasoeguisubkey=${soeguisubkey}`;
+                        nsaOrderUrl += `&nsasoeguivalue=${soeguivalue}`;
+                    }
+                    window.parent.orderTabOpened = window.open(DOMPurify.sanitize(nsaOrderUrl), soeSubkey, 'toolbar=yes,scrollbars=yes,resizable=yes,top=50,left=100,width=1000,height=800');
+                }
+            }
+        }
+        //Original order search from orderpreview
+        if (this.props.originalOrderDetailsData) {
+            const { orderNumber, orderLocation } = this.props.originalOrderDetailsData;
+            this.setState({
+                searchBy: 'Order',
+                searchOrderBy: 'Order number',
+                orderNumber: orderNumber,
+                locationCode: orderLocation,
+            });
+            setTimeout(() => this.handleClickEvent());
+            this.props.retriveOriginalOrder();
+        }
+
+        if (prebackSuccess) {
+            //not in use, hence commenting
+            // this.handleCloseModify();
+            this.props.prebackReset();
+        }
+
+        // If parameters are found in the store, we can open specific search types on mount.
+        if (prevProps.openDefaultSearch !== this.props.openDefaultSearch)
+            if (this.props.openDefaultSearch?.type) {
+                this.setState({ searchBy: this.props.openDefaultSearch.type, showResults: true });
+            }
+        if (prevProps.locationCode !== this.props.locationCode && this.props.locationCode && !this.state.uswinLocation) {
+            this.setState({ uswinLocation: this.props.locationCode });
+        }
+
+        if (prevProps.order.globalLocation !== this.props.order.globalLocation) {
+            this.setState({ showRsaTokenValidation: this.shouldShowGlobalLocation(this.props.order.globalLocation), showOrderPreview: false });
+        }
+
+        if (this.state.showRsaTokenValidation && prevProps.tokenValidationSuccess !== this.props?.tokenValidationSuccess) {
+            this.setState({ showRsaTokenValidation: false });
+            this.setState({ showRsaSuccess: true });
+        }
+
+        if (prevProps.prebackOrderDetails != this.props.prebackOrderDetails && Object.keys(this.props.prebackOrderDetails).length > 0) {
+            this.setState({
+                showPrebackOrderDetails: true,
+            });
+        }
+
+        if (prevProps.cancelPrebackOrderStatus !== this.props.cancelPrebackOrderStatus && this.props.cancelPrebackOrderStatus?.resultList?.length > 0) {
+            this.setState((prevState) => ({ cancelConfirmationOrders: [...prevState.cancelConfirmationOrders, ...this.props.cancelPrebackOrderStatus?.resultList] }));
+        }
+    }
+
+    resetState = () => {
+        this.setState({
+            isBelow: false,
+        });
+    };
+    handleSearchBy = (event) => {
+        sessionStorage.setItem('orderSearchBy', event.target.value);
+        const value = event.target.value;
+        this.props.resetOrder();
+        this.props.setSalesRepOrderDetails();
+        this.handleCleanStates();
+        this.setState({
+            searchBy: value,
+            uswin: this.props.userId,
+            setStyle: 'uswin',
+            usWinDateError: { isFromDate: false, isToDate: false, message: '' },
+            uswinLocation: '',
+            showLocationDetails: false,
+            showRsaTokenValidation: false,
+            showComboOrder: false,
+            showSearchResults: false,
+            showPrebackOrderDetails: false,
+            showRsaSuccess: false,
+            showOrderDetails: false,
+        });
+        if (value === 'Sales ID') {
+            this.setState({ isDisable: false });
+        } else if (/last\/business name/i.test(value)) {
+            this.setState({ isDisable: true });
+        }
+    };
+
+    handleUswinDateSelection = (type, date) => {
+        const { toDate, fromDate } = this.state;
+        if (type === 'toDate') {
+            if (fromDate && moment(date).toDate() > moment(fromDate).add(15, 'days').toDate()) {
+                this.setState({ toDate: date, isDisable: true, usWinDateError: { isFromDate: false, isToDate: true, message: 'To Date should not be grater than 15 days from From Date' } });
+            } else {
+                this.setState({ toDate: date, isDisable: false, usWinDateError: { isFromDate: false, isToDate: false, message: '' } });
+            }
+        } else {
+            if (toDate && moment(date).toDate() < moment(toDate).subtract(15, 'days').toDate()) {
+                this.setState({ fromDate: date, isDisable: true, usWinDateError: { isFromDate: true, isToDate: false, message: 'From Date should  be less than 15 days from to Date' } });
+            } else {
+                this.setState({ fromDate: date, isDisable: false, usWinDateError: { isFromDate: false, isToDate: false, message: '' } });
+            }
+        }
+    };
+
+    handleCustomerIdChange = (value) => {
+        this.setState({ customerId: value, isDisable: !(value?.length > 0 || this.state.subAcctNum?.length > 0) });
+    };
+
+    handleSubAccountNoChange = (value) => {
+        this.setState({ subAcctNum: value, isDisable: !(value?.length > 0 || this.state.customerId?.length > 0) });
+    };
+
+    handleLastNameChange = (lastName) => {
+        this.setState({
+            lastName,
+            isDisable: !(lastName?.length > 0 || this.state.uswinLocation?.length > 0),
+        });
+    };
+    handleLocationChange = (uswinLocation) => {
+        this.setState({
+            uswinLocation: uswinLocation.toUpperCase(),
+            isDisable: !(uswinLocation?.length > 0 || this.state.lastName?.length > 0),
+        });
+    };
+    //below method is not in use so commenting
+    // handleGlobalLocationOnChange = () => {
+    //     this.setState({
+    //         orderLocationTabClicked: false,
+    //         showRsaTokenValidation: false,
+    //     });
+    //     this.props.resetTokenValidationMessages();
+    // };
+
+    handleShowComboOrder = () => {
+        this.setState((prevState) => ({
+            showComboOrder: !prevState.showComboOrder,
+        }));
+    };
+
+    //handlers for order number ,location code change(for combo order as well)
+    handleOrderNumberChange = (value, param) =>
+        param === 'orderNumber'
+            ? this.setState({
+                  orderNumber: value,
+                  isDisable: !(value?.length > 0 || this.state.uswinLocation?.length > 0),
+              })
+            : this.setState({
+                  orderNumber2: value,
+              });
+
+    handleLocationCodeChange = (value, param) =>
+        param === 'locationCode'
+            ? this.setState({
+                  locationClear: false,
+                  uswinLocation: value.toUpperCase(),
+                  isDisable: !(value?.length > 0 || this.state.orderNumber?.length > 0 || this.state.appNum?.length > 0),
+              })
+            : this.setState({
+                  locationClear: false,
+                  locationCode2: value.toUpperCase(),
+              });
+
+    handleAppNumChange = (value) => {
+        this.setState({
+            appNum: value,
+            isDisable: !((value && value.length > 0) || this.state.uswinLocation?.length > 0),
+        });
+    };
+
+    shouldShowGlobalLocation = ({ rsaEnabled, locationType, retexMaidInd, locationSubType, masterAgentId }) => {
+        return (
+            this.props.isCoreRep &&
+            ((locationType === 'I' && rsaEnabled === 'Y') || (locationSubType === 'GN' && masterAgentId !== null) || (locationType === 'I' && rsaEnabled === 'N' && retexMaidInd === 'Y'))
+        );
+    };
+
+    handleLocationKeyDown = (e) => {
+        if (this.state.uswinLocation.length === 7 && this.state.previousUswinLocation != this.state.uswinLocation) {
+            const payload = {
+                locationCode: this.state.uswinLocation,
+                cwtDataNeeded: false,
+                retrieveMsoId: false,
+            };
+            this.setState({ orderLocationTabClicked: true });
+
+            this.props.getGlobalLocationDetails(payload);
+            this.handleShowLocationDetails();
+        }
+    };
+
+    handleSetState = (values) => {
+        this.setState(values);
+    };
+
+    handleConfirmationNoChange = (e) => {
+        const value = e.target.value;
+
+        this.setState({
+            confirmationNo: value,
+            isDisable: value.length > 0 && isNumeric(value) ? false : true,
+        });
+    };
+
+    handleConfirmationNoTwoChange = (e) => {
+        const value = e.target.value;
+
+        this.setState({
+            confirmationNoTwo: value,
+            isDisable: value.length > 0 && isNumeric(value) ? false : true,
+        });
+    };
+
+    handleShowLocationDetails = () => {
+        this.setState((prevState) => ({
+            showLocationDetails: this.state.uswinLocation.length === 7 ? true : false,
+        }));
+        this.setState({ previousUswinLocation: this.state.uswinLocation });
+    };
+
+    handleSetOrderSearchBy = (e) => {
+        const searchOrderBy = e.target.value;
+
+        this.setState((prevState) => ({
+            showComboOrder: false,
+            searchBy: 'Order',
+            searchOrderBy,
+            showLocationDetails: false,
+        }));
+    };
+
+    handleRenderSearchBy = (searchBy) => {
+        switch (searchBy) {
+            case 'USWIN/Date':
+                return (
+                    <AcssUswinSearchComp
+                        fromDate={this.state.fromDate}
+                        usWinDateError={this.state.usWinDateError}
+                        toDate={this.state.toDate}
+                        handleOnChangeOrderType={(value) => this.setState({ orderType: value })}
+                        handleOnChangeStatusType={(value) => this.setState({ statusType: value })}
+                        handleLastNameChange={(value) => this.handleLastNameChange(value, false)}
+                        handleLocationChange={this.handleLocationChange}
+                        handleKeyDown={this.handleLocationKeyDown}
+                        handleToDatePick={(date) => this.handleUswinDateSelection('toDate', date)}
+                        handleFromDatePick={(date) => this.handleUswinDateSelection('fromDate', date)}
+                        handleOnChangeUswinType={(value) => this.setState({ uswin: value })}
+                        uswin={this.state.uswin ? this.state.uswin.toLowerCase().trim() : ''}
+                        orderType={this.state.orderType}
+                        uswinLocation={this.state.uswinLocation}
+                        showLocation
+                        lastName={this.state.lastName ? this.state.lastName : ''}
+                        statusType={this.state.statusType}
+                        clearState={this.state.clearState}
+                        isDark={this.isDark}
+                        {...this.props}
+                    />
+                );
+            case 'Order':
+                return (
+                    <SearchOrder
+                        handleLastNameChange={(value) => this.handleLastNameChange(value, !(value.length > 0 && isAlphaNumericAndSpace(value)))}
+                        handleOnChangeStatusType={(value) => this.handleSetState({ statusType: value })}
+                        handleOnChangeOrderType={(value) => this.setState({ orderType: value })}
+                        handleFromDatePick={(date) => this.handleSetState({ fromDate: date })}
+                        handleToDatePick={(date) => this.handleSetState({ toDate: date })}
+                        handleAppNumChange={this.handleAppNumChange}
+                        handleKeyDown={this.handleLocationKeyDown}
+                        handleOrderNumberChange={this.handleOrderNumberChange}
+                        handleSetOrderSearchBy={this.handleSetOrderSearchBy}
+                        handleLocationCodeChange={this.handleLocationCodeChange}
+                        handleLocationChange={this.handleLocationChange}
+                        searchOrderBy={this.state.searchOrderBy}
+                        uswinLocation={this.state.uswinLocation || ''}
+                        locationCode2={this.state.locationCode2 || ''}
+                        orderNumber={this.state.orderNumber || ''}
+                        orderNumber2={this.state.orderNumber2 || ''}
+                        statusType={this.state.statusType}
+                        clearState={this.state.clearState}
+                        orderType={this.state.orderType}
+                        lastName={this.state.lastName}
+                        fromDate={this.state.fromDate}
+                        toDate={this.state.toDate}
+                        appNum={this.state.appNum || ''}
+                        showComboOrder={this.state.showComboOrder || false}
+                        handleShowComboOrder={this.handleShowComboOrder}
+                        showLocationDetails={this.state.showLocationDetails}
+                        globalLocation={this.props.globalLocation}
+                        isDark={this.isDark}
+                    />
+                );
+            case 'MDN/SKU':
+                return (
+                    <MdnSearch
+                        mdnDateError={this.state.usWinDateError}
+                        fromDate={this.state.fromDate}
+                        toDate={this.state.toDate}
+                        handleMdnNoChange={(value) =>
+                            this.setState({
+                                mdnNumber: value,
+                                isDisable: value.length > 0 && isNumeric(value) && !this.state.error ? false : true,
+                            })
+                        }
+                        handleSkuNoChange={(value) => this.setState({ skuNumber: value })}
+                        handleToDatePick={(date) => this.handleUswinDateSelection('toDate', date)}
+                        handleKeyDown={this.handleLocationKeyDown}
+                        handleFromDatePick={(date) => this.handleUswinDateSelection('fromDate', date)}
+                        mdnNumber={this.state.mdnNumber ? this.state.mdnNumber : ''}
+                        skuNumber={this.state.skuNumber ? this.state.skuNumber : ''}
+                        clearState={this.state.clearState}
+                        handleLocationChange={this.handleLocationChange}
+                        showLocation
+                        uswinLocation={this.state.uswinLocation}
+                    />
+                );
+
+            case 'Customer ID':
+                return (
+                    <CustomerId
+                        handleCustomerIdChange={this.handleCustomerIdChange}
+                        handleSubAccountNoChange={this.handleSubAccountNoChange}
+                        customerId={this.state.customerId}
+                        subAcctNum={this.state.subAcctNum}
+                        errorMessage={this.state.customerIDErr}
+                    />
+                );
+
+            case 'Pre/Back order':
+                return (
+                    <AcssPrebackOrder
+                        handleConfirmationNoChange={this.handleConfirmationNoChange}
+                        handleConfirmationNoTwoChange={this.handleConfirmationNoTwoChange}
+                        handleLocationChange={this.handleLocationChange}
+                        prebackOrdersType={this.state.prebackOrdersType}
+                        confirmationNo={this.state.confirmationNo || ''}
+                        confirmationNoTwo={this.state.confirmationNoTwo || ''}
+                        applicationNo={this.state.applicationNo || ''}
+                        handleKeyDown={this.handleLocationKeyDown}
+                        uswinLocation={this.state.uswinLocation}
+                        clearState={this.state.clearState}
+                        orderNo={this.state.orderNo || ''}
+                        isDark={this.isDark}
+                    />
+                );
+
+            case 'Paypal':
+                return (
+                    <PaypalSearch
+                        fromDate={this.state.fromDate}
+                        toDate={this.state.toDate}
+                        handleEmailChange={(value) =>
+                            this.setState({
+                                email: value,
+                                isDisable: value.length > 0 && isValidEmail(value) ? false : true,
+                            })
+                        }
+                        handleToDatePick={(date) => this.setState({ toDate: date })}
+                        handleFromDatePick={(date) => this.setState({ fromDate: date })}
+                        email={this.state.email ? this.state.email : ''}
+                        clearState={this.state.clearState}
+                        isHqUser={this.props.isHqUser}
+                    />
+                );
+            case 'Device ID':
+                return (
+                    <DeviceIdSearch
+                        handleDeviceIdChange={(value) =>
+                            this.setState({
+                                deviceId: value,
+                                isDisable: value.length > 0 && isNumeric(value) ? false : true,
+                            })
+                        }
+                        deviceId={this.state.deviceId ? this.state.deviceId : ''}
+                        isInsideSalesUser={this.props.isInsideSalesUser}
+                    />
+                );
+            case 'Credit card number':
+                return (
+                    <CreditCardNumSearch
+                        fromDate={this.state.fromDate}
+                        toDate={this.state.toDate}
+                        handleCreditNoChange={(value) =>
+                            this.setState({
+                                creditNo: value,
+                                transID: '',
+                                ccAuth: '',
+                                isDisable: value.length > 0 && isAlphaNumeric(value) ? false : true,
+                            })
+                        }
+                        handlePaymentChange={(value) =>
+                            this.setState({
+                                payment: value,
+                                transID: '',
+                                ccAuth: '',
+                                isDisable: value.length > 0 && this.state.creditNo.length > 0 && isNumeric(value) ? false : true,
+                            })
+                        }
+                        handleLocationTreasuryChange={(value) =>
+                            this.setState({
+                                locationTreasury: value,
+                                locationClear: true,
+                                isDisable: value.length > 0 && isAlphaNumeric(value) ? false : true,
+                            })
+                        }
+                        handleCCAuthChange={(value) =>
+                            this.setState({
+                                ccAuth: value,
+                                transID: '',
+                                creditNo: '',
+                                payment: '',
+                                isDisable: value.length > 0 && isAlphaNumeric(value) ? false : true,
+                            })
+                        }
+                        handleTransIDChange={(value) =>
+                            this.setState({
+                                transID: value,
+                                ccAuth: '',
+                                creditNo: '',
+                                payment: '',
+                                isDisable: value.length > 0 && isAlphaNumeric(value) ? false : true,
+                            })
+                        }
+                        handleToDatePick={(date) => this.setState({ toDate: date })}
+                        handleFromDatePick={(date) => this.setState({ fromDate: date })}
+                        locationTreasury={this.state.locationTreasury ? this.state.locationTreasury : ''}
+                        ccAuth={this.state.ccAuth ? this.state.ccAuth : ''}
+                        transID={this.state.transID ? this.state.transID : ''}
+                        creditNo={this.state.creditNo ? this.state.creditNo : ''}
+                        payment={this.state.payment ? this.state.payment : ''}
+                        clearState={this.state.clearState}
+                        teleRecording={this.props.teleRecording}
+                        locationErr={this.state.locationErr}
+                        locationCode={this.props.userLocationCode}
+                        locationClear={this.state.locationClear}
+                        isHqUser={this.props.isHqUser}
+                    />
+                );
+            case 'Internet order':
+                return (
+                    <InternetOrderSearch
+                        fromDate={this.state.fromDate}
+                        toDate={this.state.toDate}
+                        handleOnChangeInternetSearchType={(value) => {
+                            this.props.resetOrder();
+                            this.handleCleanStates();
+                            this.setState({
+                                internetOrdersType: value,
+                                isDisable: value === 'Date' ? false : true,
+                            });
+                        }}
+                        handleConfirmationNoChange={(value) =>
+                            this.setState({
+                                confirmationNo: value,
+                                isDisable: value.length > 0 && isNumeric(value) ? false : true,
+                            })
+                        }
+                        handleCisNoChange={(value) =>
+                            this.setState({
+                                cisNo: value,
+                                isDisable: value.length > 0 && isNumeric(value) ? false : true,
+                            })
+                        }
+                        handleInternetLastNameChange={(value) =>
+                            this.setState({
+                                lastName: value,
+                                isDisable: value.length > 0 && isAlphaNumeric(value) ? false : true,
+                            })
+                        }
+                        handleToDatePick={(date) => this.setState({ toDate: date })}
+                        handleFromDatePick={(date) => this.setState({ fromDate: date })}
+                        lastName={this.state.lastName ? this.state.lastName : ''}
+                        internetOrdersType={this.state.internetOrdersType}
+                        confirmationNo={this.state.confirmationNo ? this.state.confirmationNo : ''}
+                        cisNo={this.state.cisNo ? this.state.cisNo : ''}
+                        clearState={this.state.clearState}
+                        isHqUser={this.props.isHqUser}
+                    />
+                );
+            case 'DigitalCart':
+                return (
+                    <DigitalCart
+                        clearState={this.state.clearState}
+                        handleSimplifiedCartId={(event) =>
+                            this.setState({
+                                simplifiedCartId: event?.target?.value?.trim(),
+                                isDisable: event?.target?.value?.length > 0 ? false : true,
+                            })
+                        }
+                        simplifiedCartId={this.state.simplifiedCartId}
+                        handleErrorMessages={this.handleErrorMessages}
+                    />
+                );
+            default:
+                break;
+        }
+    };
+    handleCleanStates = () => {
+        // cleaning Initial state object is declared in constants file
+        this.setState({ ...cleanInitialState, clearState: Date.now() });
+        this.setState({ showSearchResults: false });
+        this.setState({ showRsaSuccess: false });
+    };
+    updateSearchCriteria = (searchCriteria) => {
+        sessionStorage.setItem('searchCriteria', JSON.stringify(searchCriteria));
+    };
+    getSearchCriteria = () => {
+        //for ACSS debugging
+        console.log(sessionStorage.getItem('loadSearchCriteria'));
+        if (sessionStorage.getItem('loadSearchCriteria') === 'true') {
+            console.log('inside getSearchCriteria');
+            this.setState({ disableSearchBtn: true });
+        }
+        return sessionStorage.getItem('loadSearchCriteria') === 'true' ? JSON.parse(sessionStorage.getItem('searchCriteria')) || {} : {};
+    };
+    removeSearchCriteria = () => {
+        sessionStorage.removeItem('loadSearchCriteria');
+    };
+    handleClearButton() {
+        this.handleCleanStates();
+        this.props.resetOrder();
+        sessionStorage.removeItem('loadSearchCriteria');
+        sessionStorage.removeItem('searchCriteria');
+        if (this.state.searchBy === 'USWIN/Date') {
+            this.setState({
+                // no change to uswin state value for D2D, should always remain as rep cannot edit
+                isDisable: this.props.userId.length === 0 ? false : true,
+            });
+        }
+
+        if (this.state.showRemarks) {
+            this.setState({ showRemarks: false });
+        }
+
+        if (this.state.showOrderPreview) {
+            this.setState({ showOrderPreview: false });
+        }
+
+        if (this.state.showPrebackOrderDetails) {
+            this.setState({ showPrebackOrderDetails: false });
+        }
+
+        if (this.state.searchBy === 'Order') {
+            this.setState({
+                locationCode: this.props.userLocationCode,
+                locationClear: true,
+                orderNumber2: '',
+                locationCode2: '',
+                fromDate: getDateFormat(moment().subtract(1, 'months').toDate()),
+                isDisable: true,
+                lastName: '',
+                uswinLocation: '',
+            });
+        }
+        if (/sales id/i.test(this.state.searchBy)) {
+            this.setState({
+                isDisable: false,
+            });
+            this.props.setSalesRepOrderDetails();
+        }
+    }
+
+    handleClickEvent = (pageNum = 1) => {
+        this.props.clearErrors();
+        this.props.resetOrder();
+        this.props.prebackReset();
+        const type = this.state.searchBy;
+        this.handleUpdatePagination(pageNum);
+        if (isNullOrEmpty(this.props.globalLocation?.locationType)) {
+            this.handleLocationKeyDown();
+        }
+
+        if (this.state.showRemarks) {
+            this.setState({ showRemarks: false });
+        }
+        if (this.state.showPrebackOrderDetails) {
+            this.setState({ showPrebackOrderDetails: false });
+        }
+
+        if (this.state.showRsaSuccess) {
+            this.setState({ showRsaSuccess: false });
+        }
+
+        if ((this.props?.globalLocation?.locationType === 'I' || this.props.globalLocation?.locationSubType === 'GN') && this.props.isCoreRep && isNullOrEmpty(this.props?.tokenValidationSuccess)) {
+            this.setState({ showRsaTokenValidation: true });
+        }
+
+        Trace.tracePageAction('LpSearch', { OrderSearch: type });
+
+        this.setState({
+            selectedRow: undefined,
+            showResults: true,
+            orderTableScrollY: 0,
+            showSearchResults: true,
+            showOrderPreview: false,
+            showOrderDetails: true,
+        });
+
+        const searchCriteria = {
+            searchBy: type,
+            ...(type === 'Order' && { searchOrderBy: this.state.searchOrderBy }),
+            criteria: {},
+        };
+        switch (type) {
+            case 'USWIN/Date':
+                searchCriteria.criteria = {
+                    uswin: this.state.uswin,
+                    uswinLocation: this.state.uswinLocation,
+                    fromDate: this.state.fromDate,
+                    toDate: this.state.toDate,
+                    orderType: this.state.orderType,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleUswinRequest(type, pageNum);
+            case 'MDN/SKU':
+                searchCriteria.criteria = {
+                    mdnNumber: this.state.mdnNumber,
+                    skuNumber: this.state.skuNumber,
+                    uswinLocation: this.state.uswinLocation,
+                    fromDate: this.state.fromDate,
+                    toDate: this.state.toDate,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleMdnRequest(type);
+            case 'Pre/Back order':
+                searchCriteria.criteria = {
+                    confirmationNo: this.state.confirmationNo,
+                    confirmationNoTwo: this.state.confirmationNoTwo,
+                };
+                this.props.updatePreOrderCancelStatus({ preBackOrderstatus: '', resultList: [] });
+                this.updateSearchCriteria(searchCriteria);
+                return this.handlePrebackOrderRequest(type);
+            case 'Customer ID':
+                searchCriteria.criteria = {
+                    customerId: this.state.customerId,
+                    subAcctNum: this.state.subAcctNum,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleCustomerIdRequest(type);
+            case 'Paypal':
+                searchCriteria.criteria = {
+                    email: this.state.email,
+                    fromDate: this.state.fromDate,
+                    toDate: this.state.toDate,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handlePaypalRequest(type);
+            case 'Device ID':
+                searchCriteria.criteria = {
+                    deviceId: this.state.deviceId,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleDeviceRequest(type);
+            case 'Credit card number':
+                searchCriteria.criteria = {
+                    amount: this.state.payment,
+                    endDate: this.formatCreditCardDate(this.state.toDate),
+                    startDate: this.formatCreditCardDate(this.state.fromDate),
+                    ccNumber: this.state.creditNo?.trim(),
+                    locationCode: this.state.locationTreasury ? this.state.locationTreasury : this.props.userLocationCode,
+                    authCode: this.state.ccAuth ? this.state.ccAuth : '',
+                    transId: this.state.transID ? this.state.transID : '',
+                    ptaSearch: !isNumAndStar(this.state.creditNo?.trim()),
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleCreditCardRequest(type);
+            case 'Internet order':
+                return this.handleInternetOrderRequest(type);
+            case 'DigitalCart':
+                searchCriteria.criteria = {
+                    cartId: this.state.simplifiedCartId,
+                    fromMyBiz: true,
+                };
+                this.updateSearchCriteria(searchCriteria);
+                return this.handleDigitalCartRequest(type);
+            case 'Order':
+                switch (this.state.searchOrderBy) {
+                    case 'Application no':
+                        searchCriteria.criteria = {
+                            appNum: this.state.appNum,
+                            uswinLocation: this.state.uswinLocation,
+                        };
+                        this.updateSearchCriteria(searchCriteria);
+                        return this.handleAppNumberRequest(type);
+                    case 'Last/Business name':
+                        searchCriteria.criteria = {
+                            lastName: this.state.lastName,
+                            uswinLocation: this.state.uswinLocation,
+                            fromDate: this.state.fromDate,
+                            toDate: this.state.toDate,
+                            orderType: this.state.orderType,
+                        };
+                        this.updateSearchCriteria(searchCriteria);
+                        return this.handleLastNameRequest(this.state.searchOrderBy, pageNum);
+                    default:
+                        //default: 'Order number':
+                        searchCriteria.criteria = {
+                            orderNumber: this.state.orderNumber,
+                            orderNumber2: this.state.orderNumber2,
+                            uswinLocation: this.state.uswinLocation,
+                            locationCode2: this.state.locationCode2,
+                        };
+                        this.updateSearchCriteria(searchCriteria);
+                        return this.handleOrderRequest(type, true);
+                }
+            default:
+                return this.handleOrderRequest(type);
+        }
+    };
+
+    handleUpdatePagination = (pageNumber) => {
+        this.setState({
+            pageValue: pageNumber,
+        });
+    };
+
+    handleLastNameRequest(type, pageNum = 1) {
+        const lastNameRequest = {
+            locationCode: this.state.uswinLocation.trim(),
+            lastName: this.state.lastName.toUpperCase(),
+            orderType: this.state.orderType,
+            orderStatus: this.state.statusType === 'All' ? '' : this.state.statusType,
+            fromOrderDate: this.state.fromDate,
+            toOrderDate: this.state.toDate,
+            pageNum,
+        };
+        this.props.loadOrders(lastNameRequest, type);
+    }
+
+    handleCustomerIdRequest(type) {
+        const { customerId, subAcctNum } = this.state;
+        //checks for the input length,iflength is 9 ad first digit is not zero ,append a zero
+        let custId = customerId;
+        if (!!customerId && customerId.length === 9) {
+            custId = customerId.match(/\d/)[0] !== 0 ? `0${customerId}` : customerId;
+        }
+        if (!custId || !subAcctNum || subAcctNum.length !== 5 || custId.length !== 10) {
+            this.setState({ customerIDErr: 'Please enter a valid account number' });
+        } else {
+            const customerReqId = `${custId}-${subAcctNum}`;
+            this.setState({ custAccountNumber: customerReqId, customerIDErr: '' });
+            const request = { customerId: customerReqId, retrieveECPD: false, retrieveISPU: false, retrieveBOGO: true, retrieveLastName: false, retrieveHoldOrders: false };
+            this.props.loadOrders(request, type);
+        }
+    }
+
+    handleAppNumberRequest(type) {
+        const appNumRequest = {
+            creditAppNumber: this.state.searchOrderBy === 'Order number' ? this.state.orderNumber : this.state.appNum.trim(),
+            usWin: this.state.uswin ? this.state.uswin.toLowerCase().trim() : '',
+        };
+        this.props.loadOrders(appNumRequest, 'Application no');
+    }
+
+    handleMdnRequest(type) {
+        const mdnRequest = {
+            locationCode: !this.state.isChecked ? this.state.uswinLocation.trim() : null,
+            mobileNumber: this.state.mdnNumber.trim(),
+            sKU: this.state.skuNumber ? String(this.state.skuNumber).toUpperCase() : '',
+            createStart: this.state.fromDate,
+            createEnd: this.state.toDate,
+        };
+        this.props.loadOrders(mdnRequest, type);
+    }
+
+    handleOrderRequest(type, loadRefundStatusFlag = false) {
+        // To-Do: enforce actual location code before searching
+        //modified to handle combo orders and normal orders
+        const { orderNumber, orderNumber2, uswinLocation = '', locationCode2 = '' } = this.state;
+        let request;
+        if (this.state.showComboOrder && orderNumber2 && locationCode2) {
+            if (orderNumber !== null && uswinLocation !== null) {
+                request = {
+                    locationCode: '',
+                    orderNumber: '',
+                    orderStatus: '',
+                    comboOrders: [
+                        {
+                            locationCode: uswinLocation.toUpperCase(),
+                            orderNumber: orderNumber,
+                        },
+                        {
+                            locationCode: locationCode2.toUpperCase(),
+                            orderNumber: orderNumber2,
+                        },
+                    ],
+                };
+            }
+        } else {
+            request = {
+                locationCode: !uswinLocation ? '' : uswinLocation.toUpperCase(),
+                orderNumber: orderNumber,
+                comboOrders: null,
+                orderStatus: this.state.statusType === 'All' ? '' : this.state.statusType,
+            };
+        }
+
+        if (loadRefundStatusFlag) {
+            let comboOrdersPayload = [];
+            comboOrdersPayload.push({
+                locationCode: uswinLocation.toUpperCase(),
+                orderNum: orderNumber,
+            });
+            if (this.state.showComboOrder && locationCode2 && orderNumber2) {
+                comboOrdersPayload.push({
+                    locationCode: locationCode2 ? locationCode2.toUpperCase() : '',
+                    orderNum: orderNumber2 ? orderNumber2 : '',
+                });
+            }
+            this.props.loadOrderRefundStatusFlag({
+                comboOrders: comboOrdersPayload,
+            });
+        }
+        this.props.loadOrders(request, type);
+    }
+
+    handleUswinRequest(type, pageNum = 1) {
+        const usWinVal = this.state.uswin === 'All' ? '' : this.state.uswin.toLowerCase().trim();
+        const uswinRequest = {
+            pageNum,
+            locationCode: this.state.uswinLocation.trim(),
+            orderStartDate: this.state.fromDate,
+            orderEndDate: this.state.toDate,
+            orderType: this.state.orderType,
+            usWin: this.state.uswin ? usWinVal : '',
+            // unique to b2b only
+            orderStatus: this.state.statusType === 'All' ? '' : this.state.statusType,
+            lastBusinessName: isEmpty(this.state.lastName) ? '' : this.state.lastName.toUpperCase(),
+        };
+        this.props.loadOrders(uswinRequest, type);
+    }
+
+    handlePaypalRequest(type) {
+        if (this.state.email && !this.state.fromDate && !this.state.toDate) {
+            const request1 = {
+                emailId: this.state.email,
+            };
+            this.props.loadOrders(request1, type);
+        } else {
+            const request2 = {
+                emailId: this.state.email,
+                orderStartDate: this.state.fromDate,
+                orderEndDate: this.state.toDate,
+            };
+            this.props.loadOrders(request2, type);
+        }
+    }
+
+    handleDeviceRequest(type) {
+        const request = {
+            locationCode: '',
+            deviceid: this.state.deviceId?.trim(),
+        };
+        this.props.loadOrders(request, type);
+    }
+
+    formatCreditCardDate = (dateValue) => {
+        return moment(new Date(dateValue)).format('DD-MMM-YYYY');
+    };
+
+    //credit card search/pta token
+    handleCreditCardRequest(type) {
+        //error handling for credit card location search if required field not available
+        if (!isEmpty(this.state.locationTreasury) && this.state.creditNo.length < 1 && this.state.ccAuth.length < 1 && this.state.transID.length < 1 && this.state.payment.length < 1) {
+            //set error state to true
+            this.setState({
+                locationErr: true,
+            });
+        } else {
+            const creditCardRequest = {
+                amount: this.state.payment,
+                endDate: this.formatCreditCardDate(this.state.toDate),
+                startDate: this.formatCreditCardDate(this.state.fromDate),
+                ccNumber: this.state.creditNo?.trim(),
+                locationCode: this.state.locationTreasury ? this.state.locationTreasury : this.props.userLocationCode,
+                authCode: this.state.ccAuth ? this.state.ccAuth : '',
+                transId: this.state.transID ? this.state.transID : '',
+                ptaSearch: !isNumAndStar(this.state.creditNo?.trim()),
+            };
+            //set error state to false and make api call
+            this.setState({
+                locationErr: false,
+            });
+            this.props.loadOrders(creditCardRequest, type);
+        }
+    }
+
+    handleInternetOrderRequest(type) {
+        const internetOrderRequest = {
+            locationCode: this.props.userLocationCode,
+            cisOrderNumber: this.state.cisNo?.trim(),
+            confirmationNumber: this.state.confirmationNo?.trim(),
+            lastBusinessName: this.state.lastName?.trim(),
+        };
+        if (this.state.internetOrdersType === 'Date' || this.state.internetOrdersType === 'Last/Business name') {
+            internetOrderRequest['fromOrderDate'] = getDateFormat(this.state.fromDate);
+            internetOrderRequest['toOrderDate'] = getDateFormat(this.state.toDate);
+        }
+        this.props.loadOrders(internetOrderRequest, type);
+    }
+
+    handleDigitalCartRequest(type) {
+        let request = {
+            cartId: this.state.simplifiedCartId,
+            fromMyBiz: true,
+        };
+        this.props.loadOrders(request, type);
+    }
+
+    handlePrebackOrderRequest(type, pageNum = 1) {
+        const prebackOrderRequest = {
+            locationCode: this.state.uswinLocation,
+            applicationNumber: this.state.applicationNo.trim(),
+            confirmationNumberList: [this.state.confirmationNo.trim(), this.state.confirmationNoTwo.trim()].filter((e) => e !== ''),
+            orderNumber: this.state.orderNo?.trim(),
+            lastBusinessName: this.state.lastName.toUpperCase(),
+            pageNum: pageNum,
+            useAcssPrebackUrl: true,
+            searchType: 'ICONIC_ORDERS_BY_CONFIRMATION_NO',
+        };
+        this.props.loadOrders(prebackOrderRequest, type);
+    }
+
+    renderSearchResultsContainer = () => {
+        let { order, isLoading, salesRepOrderDetails = [], totalRecords = 0, customerInfo } = this.props.order;
+        const { aceOrderTelRepLocSearchDetailsList = [] } = salesRepOrderDetails;
+        const { pageValue, searchBy } = this.state;
+
+        const aceOrderTelRepLocSearchDetailsListLen = aceOrderTelRepLocSearchDetailsList ? aceOrderTelRepLocSearchDetailsList.length : 0;
+        const orderLengthVal = !isEmpty(order) ? order.length : aceOrderTelRepLocSearchDetailsListLen;
+        const totalRows = order && /last\/business name|uswin\/date|pre\/back order/i.test(searchBy) ? totalRecords : orderLengthVal;
+        const showNoResultsAvailable = !isLoading && totalRows === 0;
+        if (showNoResultsAvailable && this.state.showResults) {
+            this.setState({
+                showResults: false,
+                isExpand: false,
+                isBelow: true,
+            });
+        }
+
+        return (
+            <div>
+                {(!this.props.isCoreRep || !(this.props.globalLocation?.locationType === 'I' && isNullOrEmpty(this.props?.tokenValidationSuccess))) &&
+                (!isEmpty(order) || (!isEmpty(salesRepOrderDetails) && salesRepOrderDetails.totalCount > 0)) &&
+                order?.length > 0 ? (
+                    <div className="orderTable acssOrderTable" data-testid="orderTableTest" id="orderTable" onScroll={this.handleOrderSearchScroll} ref={this.orderTableRef}>
+                        <OrderTable
+                            order={order}
+                            customerInfo={customerInfo}
+                            handleViewOrder={this.handleViewOrder}
+                            handleViewData={this.handleViewData}
+                            handleInfoIcon={this.handleOrderInfoIcon}
+                            infoIcon={this.props.order.infoIcon}
+                            orderNumber={this.state.orderNumber}
+                            searchBy={this.state.searchBy}
+                            ptaSearchType={this.state.ptaSearchType}
+                            prebackOrdersType={this.state.prebackOrdersType}
+                            mdnNumber={this.state.mdnNumber}
+                            location={this.state.locationCode ? this.state.locationCode : this.state.uswinLocation}
+                            repId={this.state.repId}
+                            pageNumber={pageValue}
+                            handleSelectedIndex={(index) =>
+                                this.setState({
+                                    selectedRow: index,
+                                })
+                            }
+                            handleHideButtonAndOrderNumber={this.handleHideButtonAndOrderNumber}
+                            handleCIDBDelete={this.props.handleCIDBDelete}
+                            CIDBItem={this.props.CIDBItem}
+                            userProfileInfo={this.props.userProfileInfo}
+                            selectedRow={this.state.selectedRow}
+                            handleScroll={this.handleScroll}
+                            loading={isLoading}
+                            loadBasicMTN={this.props.loadBasicMTN}
+                            basicMTNInfo={this.props.basicMTNInfo}
+                            handleActivationStatusModal={this.handleActivationStatusModal}
+                            handleCancelPrebackOrder={this.handleCancelPrebackOrder}
+                            getCancelPreBackOrderStatus={this.getCancelPreBackOrderStatus}
+                            cancelPrebackOrderStatus={this.props.cancelPrebackOrderStatus}
+                            handleOrderDetails={this.handleOrderDetails}
+                            serviceChange={this.props.serviceChange}
+                            searchOrderBy={this.state.searchOrderBy}
+                            refundFlag={this.props.refundFlag}
+                            ispuFlag={this.props.ispuFlag}
+                            isDark={this.isDark}
+                            source={this.state.source}
+                        />
+                    </div>
+                ) : (
+                    !this.props?.error && !isLoading && this.state.showSearchResults && <p className={`acss-no-records ${this.isDark ? ' acss-cell-dark' : ''}`}>No Records found</p>
+                )}
+            </div>
+        );
+    };
+
+    handleOrderSearchScroll = () => {
+        this.setState({
+            orderTableScrollY: this.orderTableRef.current.scrollTop,
+        });
+    };
+
+    handleScroll = () => {
+        setTimeout(() => {
+            if (this.orderTableRef.current) {
+                this.orderTableRef.current.scrollTop = this.state.orderTableScrollY;
+            }
+        }, 10);
+    };
+
+    handleOrderInfoIcon = (item) => {
+        let IconRequest = {
+            creditApplicationNum: item.appnumber ? `${item.appnumber.replace(/\s\w*/i, '')}` : '',
+            locationCode: item.location ? item.location : locationCode,
+        };
+        this.props.loadOrderIcon(IconRequest);
+    };
+
+    handleHideButtonAndOrderNumber = (value, orderNumber, locationCodeValue) => {
+        this.setState({
+            buttonHide: value,
+            orderNumber: orderNumber,
+        });
+    };
+
+    handleActivationStatusModal = (locationCode) => {
+        this.setState({ showActivationStatusModal: true });
+        this.setState({ uswinLocation: locationCode });
+    };
+
+    handleModalClose = () => {
+        this.setState({
+            showModal: false,
+        });
+    };
+
+    handleCancelPrebackOrder = (confNum, location) => {
+        const userId = getCookie('ACSS_ROUTER_ID_NSA');
+
+        const payload = {
+            preOrderId: confNum,
+            locationCode: location,
+            userId: userId ? userId : 'CAREENC01',
+        };
+        this.props.cancelPrebackOrder(payload);
+    };
+
+    getCancelPreBackOrderStatus = (confNum) => {
+        if (this.state.cancelConfirmationOrders?.length > 0 && this.state.cancelConfirmationOrders?.some((result) => result.includes(confNum))) {
+            return true;
+        }
+        return false;
+    };
+
+    handleOrderDetails = (order) => {
+        this.props.getOrderDetailsRequest(
+            order.orderType,
+            {
+                locationCode: order.locationCode,
+                orderNum: order.orderNum,
+            },
+            {
+                locationCode: order.locationCode,
+                confNum: order.confNum,
+                salesRepId: order.salesRepId,
+                retrievePreorderDetails: 'Y',
+            }
+        );
+    };
+
+    handleViewOrder = (orderNumber, location, selectedRow, mobileNumber, ptaResumeDataForJWT = null, orderTypeProp = '') => {
+        // hide Live review
+        if (sessionStorage.getItem('channel') === 'CHAT-STORE') {
+            let hideLiveReviewBtn = window.parent; //live review
+            const liveReviewEventData = {
+                iframe: 'livereview',
+                url: '',
+                enableLiveReviewBtn: false,
+            };
+            hideLiveReviewBtn.postMessage(liveReviewEventData, POSTMESSAGE_ORIGIN);
+        }
+        const { userId, salesRepId } = this.props.userProfileInfo;
+        const { userLocationCode } = this.props;
+        const userLocationCodeVal = !isEmpty(userLocationCode) ? userLocationCode : sessionStorage.getItem('location');
+        const locationCode = !isEmpty(location) ? location : this.state.uswinLocation ? this.state.uswinLocation : userLocationCodeVal;
+        const { order, salesRepOrderDetails = [] } = this.props.order;
+        const aceOrderTelRepLocSearchDetailsList = !isEmpty(salesRepOrderDetails) && salesRepOrderDetails.aceOrderTelRepLocSearchDetailsList;
+        const { salesidIndex = 0 } = this.state;
+        const salesRepRes = !isEmpty(aceOrderTelRepLocSearchDetailsList) && aceOrderTelRepLocSearchDetailsList[salesidIndex];
+        const orderRes = !isEmpty(order) && order[selectedRow];
+        const { aceOrdcartID, ecpdLiabilityType, ecpdId, cartId, nsaOrder } = salesRepRes ? salesRepRes : orderRes;
+        const prepayViewOrder = !/y/i.test(nsaOrder);
+        const postpayBauViewOrder = /flex/i.test(aceOrdcartID);
+        const fortyFiveDaysOld = orderRes['nsaOrderNotCompletedAfterFortyFiveDays'] === true || orderRes['nsaOrderAfterFortyFiveDays'] === true;
+        const orderType = !isEmpty(salesRepRes) && salesRepRes.orderType;
+        const isB360Order = /b2bso_/i.test(aceOrdcartID);
+        const isCleuCustomer = (!isB360Order && !isEmpty(ecpdId) && /c/i.test(ecpdLiabilityType)) || !isEmpty(cartId);
+        const orderTypeId = !isEmpty(order) && order[selectedRow] && order[selectedRow].aceOrdcartID;
+        const orderTypeShortDesc = get(order[selectedRow], 'orderTypeShortDesc', null);
+        // First check for B360 scenarios (regardless of order type)
+        if (isB360Order || (isCleuCustomer && orderTypeId !== 'MSF_QASALES')) {
+            this.handleB2BOrdering(orderNumber, location);
+        } else {
+            const orderTypeURLVal = getApplicationRedirectUrls('carestore');
+            let url = orderTypeId === 'MSF_QASALES' ? '' : orderTypeURLVal;
+            url += sessionStorage.getItem('channel') || 'OMNI-RETAIL';
+            if (fortyFiveDaysOld && !prepayViewOrder) {
+                url += '&fortyFiveDaysOrder=true';
+            }
+            if (orderTypeId === 'MSF_QASALES') {
+                const hostProtocol = window.location.hostname === 'localhost' ? 'https:' : window.location.protocol;
+                const soe = 'soe';
+                //const localHostLowerEnv = (window.location.hostname === 'localhost')?
+                const channelHost = 'carestore';
+                const lowerEnvURLVal = window.location.hostname === 'localhost' ? '-' + ENV_OVERRIDE_SOE() : '-nssit' + window.location.hostname.match(/[nsd|nssit|nsq]+(\d{1})/i)?.[1];
+                const lowerEnv = isAcssProd() ? '' : lowerEnvURLVal;
+                const hostVal = isAcssProd() ? '.vzwcorp.com' : lowerEnv + '.verizon.com';
+                url = `${hostProtocol}//${channelHost}-${soe}${hostVal}${CARE_QUICKACCESSORY_PATH}`;
+
+                const requestTypeVal = !isEmpty(order) && order[selectedRow].orderTypeShortDesc ? order[selectedRow].orderTypeShortDesc : orderType;
+                const orderTypeVal = orderRes?.requestType ? orderRes.requestType : requestTypeVal;
+                const qaOrderType = orderRes?.orderType ? orderRes.orderType : orderTypeVal;
+                url += `&orderType=${qaOrderType}`;
+            } else {
+                const ordertype = isEmpty(orderTypeProp) && !isEmpty(order) && order[selectedRow].orderTypeShortDesc ? order[selectedRow].orderTypeShortDesc : orderTypeProp;
+                url += `&orderType=${ordertype}`;
+            }
+
+            // Send this flag to read order for resuming PTA orders.
+            if (!isEmpty(ptaResumeDataForJWT)) {
+                url += `&isPaxResume=true`;
+            }
+
+            url += `&LocationCode=${locationCode}`;
+            url += `&orderLocationCode=${locationCode}`;
+            url += `&orderNumber=${orderNumber}`;
+
+            url += '&locationType=S';
+            url += `&salesRep=${salesRepId}`;
+            url += `&loggedInUser=${userId}`;
+            url += `&locationCode=${locationCode}`;
+            if (!isEmpty(this.props.interactionCaseId) && this.props.IITSShippingAddEnable === 'Y' && !isEmpty(this.props.acssBaseURL)) {
+                const acssEncodeBaseURL = encodeURIComponent(this.props.acssBaseURL);
+                url += `&InteractionCaseId=${this.props.interactionCaseId}`;
+                url += `&IITSShippingAddEnable=${this.props.IITSShippingAddEnable}`;
+                url += `&acssBaseURL=${acssEncodeBaseURL}`;
+            }
+            url += `&isB360Order=${isB360Order}`;
+
+            this.props.setCookieRequest({ orderNumber, locationCode, url, mobileNumber, ptaResumeDataForJWT, orderTypeId });
+        }
+    };
+
+    handleB2BOrdering = (order, location) => {
+        const request = {
+            locationCode: location,
+            orderNumber: order,
+            b360Order: true,
+            retrieveISPU: false,
+            retrieveBOGO: true,
+            retrieveLastName: false,
+            orderStatus: '',
+        };
+        var order = {};
+        try {
+            this.props.loadOrders(request, 'Order', '');
+        } catch (httpError) {
+            console.error('LOG-DEBUG: App -> Read Order -> Error while read-order-details', httpError);
+        }
+    };
+
+    render() {
+        const { searchBy, isBelow } = this.state;
+        const { order } = this.props.order;
+        const isLoading = this.props.isLoading || this.props.isOrderRemarksLoading || this.props.isSetCookieLoading;
+
+        let { deviceId = '', orderNum = '', ordStatus = '' } = order?.[0] ?? {};
+        const confNumVal = this.props.order?.order && this.props.order?.order.length > 0 ? this.props.order?.order[0]?.confNum : '';
+        const remarks = this.props.remarkDetails?.remark?.length === 0 ? this.state.noRemarks : this.props.remarkDetails?.remark;
+        const tableHeaders = ['Line', 'MTN', 'Date', 'Carrier_Tracking_Number', 'Status'];
+        const shouldDisableSearch =
+            this.props.orderSearchParams?.orderNumber?.length > 0 || this.props.orderSearchParams?.confirmationNumber?.length > 0 || this.state.disableSearchBtn ? false : this.state.isDisable;
+        return (
+            <Suspense fallback={null}>
+                {isLoading && <Loader active />}
+
+                <div
+                    id="orderSearchContainer"
+                    className={`SearchTopContainer${isBelow ? ' below' : ''} ${this.isDark ? 'search-container-dark' : ''}`}
+                    onClick={() => {
+                        this.resetState();
+                    }}
+                    data-testid="reset">
+                    {this.props.isCoreRep && <AcssSelectApplication globalLocation={this.props.globalLocation || {}} orderNumber={this.state.orderNumber} isDark={this.isDark} />}
+                    <div className={this.isDark ? 'SearchOptions acss-dark-theme' : 'SearchOptions order-search-wrapper'}>
+                        <div className="SearchOption">
+                            <div className="SearchOptionsCol">
+                                <div className="orderDropdownStyle">
+                                    <Label>Search by</Label>
+                                    <DropdownSelect
+                                        ariaLabel={`Search by ${searchBy}`}
+                                        data-testid="order"
+                                        name="type"
+                                        role="combobox"
+                                        placeholder={searchBy}
+                                        error={false}
+                                        value={searchBy}
+                                        onChange={(event) => this.handleSearchBy(event)}>
+                                        {(this.props.isInsideSalesUser ? InsideSalesOrderSearchList : AcssOrderSearchList).map((category) => {
+                                            return <option value={category.value}>{category.label}</option>;
+                                        })}
+                                    </DropdownSelect>
+                                </div>
+                            </div>
+                            {this.handleRenderSearchBy(searchBy)}
+                        </div>
+                        <div>
+                            {this.state.showLocationDetails && (
+                                <div data-testid="checkDark" className={this.isDark ? 'acss-no-records acss-cell-dark' : 'acss-no-records'}>
+                                    <div className="location-margin">
+                                        <b>Location Type:</b> {this.props.globalLocation?.locationType}
+                                    </div>
+                                    <div className="location-margin">
+                                        <b>Location Name:</b> {this.props.globalLocation?.locationName}
+                                    </div>
+                                    <div className="location-margin">
+                                        <b>Billing Outlet ID:</b> {this.props.globalLocation?.activatingAgent}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="SearchOption"></div>
+                        <div className="Buttons">
+                            <div>
+                                <Button
+                                    className={`${this.isDark && shouldDisableSearch ? ' search-dark-disabled' : 'SearchButton'}`}
+                                    data-track="search-order"
+                                    disabled={shouldDisableSearch}
+                                    onClick={() => {
+                                        this.handleClickEvent();
+                                    }}
+                                    data-testid="search">
+                                    {'Search'}
+                                </Button>
+                            </div>
+                            <div>
+                                <Button
+                                    secondary
+                                    className={`${this.isDark && shouldDisableSearch ? ' clear-dark-disabled' : 'ClearButton'}`}
+                                    data-track="clear-order-search"
+                                    onClick={this.handleClearButton}
+                                    disabled={shouldDisableSearch}
+                                    data-testid="clear">
+                                    {'Clear'}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {this.state.showRemarks && (
+                        <div className={`remarks-scroll ${this.isDark ? ' acss-dark-theme remarks-scroll-dark' : ''}`}>
+                            <div className="remarks-header-align acss">
+                                <div>Remarks</div>
+                                <div className="remarks-header">
+                                    <Button onClick={() => this.handleViewData('remarks')} color={this.isDark ? 'white' : 'black'} data-testid="validate">
+                                        Close remarks
+                                    </Button>
+                                </div>
+                                <span onClick={() => this.handleViewData('remarks')}>
+                                    <Icon name="close" color={this.isDark ? 'white' : 'black'} style={{ height: '2rem', width: '2rem' }} class="icon" size="extraLarge" />
+                                </span>
+                            </div>
+                            {remarks && <OrderRemarksInfo remarkDetails={remarks} carrierTrackingInfo={this.props.carrierTrackingInfo} />}
+                            <Button className="trackItButton" onClick={() => this.showTrackShipment()} style={{ display: 'flex' }}>
+                                {'Track Shipment'}
+                            </Button>
+                            {this.state.showFFLTrackingInfo && (
+                                <Table className="OrderRemarksInfoTable">
+                                    <TableHead className="OrderRemarksInfoTableHeader">
+                                        {tableHeaders.map((item, index) => {
+                                            return (
+                                                <TableHeader className="tableHeader" key={`${index}`}>
+                                                    {item}
+                                                </TableHeader>
+                                            );
+                                        })}
+                                    </TableHead>
+                                    <TableBody className="OrderRemarksInfoTableBody">
+                                        {this.props.carrierTrackingInfo?.length > 0 ? (
+                                            this.props.carrierTrackingInfo?.map((item, index) => {
+                                                const mtn = item?.mobileNumber,
+                                                    shipDate = item?.fflTrackingDetails?.shipDate,
+                                                    trackingNo = item?.fflTrackingDetails?.trackingNumber,
+                                                    carrier = item?.fflTrackingDetails?.shippingCarrier;
+                                                return item !== null ? (
+                                                    <TableRow key={`${index}`} className="OrderRemarksInfoTableRow">
+                                                        <Cell>{index + 1}</Cell>
+                                                        <Cell>{mtn}</Cell>
+                                                        <Cell>{shipDate ? shipDate?.slice(0, 2) + '/' + shipDate?.slice(2, 4) + '/' + shipDate?.slice(4, 8) : ''}</Cell>
+                                                        <Cell>{this.buildTrackingNumberUrl(carrier, trackingNo)}</Cell>
+                                                        <Cell>{!(shipDate && trackingNo) ? 'Shipment request not received' : shipDate ? 'SENT' : trackingNo ? 'SHIPPED' : ''}</Cell>
+                                                    </TableRow>
+                                                ) : (
+                                                    <TableRow key={index} className="OrderRemarksInfoTableRow">
+                                                        <Cell>{index + 1}</Cell>
+                                                        <Cell></Cell>
+                                                        <Cell></Cell>
+                                                        <Cell></Cell>
+                                                        <Cell>{'Shipment request not received'}</Cell>
+                                                    </TableRow>
+                                                );
+                                            })
+                                        ) : (
+                                            <TableRow key={`0`} className="OrderRemarksInfoTableRow">
+                                                <Cell>{'1'}</Cell>
+                                                <Cell></Cell>
+                                                <Cell></Cell>
+                                                <Cell></Cell>
+                                                <Cell>{'Shipment request not received'}</Cell>
+                                            </TableRow>
+                                        )}
+                                    </TableBody>
+                                </Table>
+                            )}
+                        </div>
+                    )}
+                    {this.state.showRsaTokenValidation && this.props.isCoreRep && (
+                        <>
+                            <GlobalLocationRsaToken
+                                globalLocation={this.props.globalLocation || {}}
+                                isCoreRep={this.props.isCoreRep}
+                                isDark={this.isDark}
+                                handleViewData={(index) => this.handleViewData(index)}
+                            />
+                        </>
+                    )}
+
+                    {this.state.showRsaSuccess && this.props.isCoreRep && (
+                        <>
+                            <div className={this.isDark ? 'acss-dark-theme' : ''}>
+                                <div className="acss remarks-header-align">
+                                    <div>Validate Token Results</div>
+                                    <span onClick={() => this.handleViewData('rsaTokenSuccess')} data-testid="rsaTokenSuccess">
+                                        <Icon name="close" style="margin-right:200px" color={this.isDark ? 'white' : 'black'} class="icon" size="extraLarge" />
+                                    </span>
+                                </div>
+                                <div className="rsa-token-results">
+                                    <p>Result : {this.props?.tokenValidationSuccess?.rsaTokenDetails}</p>
+                                    <p>Credential Type :{this.props?.tokenValidationSuccess?.credentialType} </p>
+                                    <p>AuthenticatioID : {sessionStorage.getItem('successAuthenticationID')}</p>
+                                    <p>Token : {this.props?.tokenValidationSuccess?.rsaToken}</p>
+                                    <p>UserId : {this.props?.tokenValidationSuccess?.appUserId}</p>
+                                    <p>Last Name : {this.props?.tokenValidationSuccess?.lastName}</p>
+                                    <p>First Name : {this.props?.tokenValidationSuccess?.firstName}</p>
+                                    <p>Location Code : {this.props?.tokenValidationSuccess?.locationCode}</p>
+                                    <p>Location Name : {this.props?.tokenValidationSuccess?.locationName}</p>
+                                    <a onClick={() => this.handleViewData('rsaTokenSuccess')} style={{ fontSize: '20px' }}>
+                                        Clear Results
+                                    </a>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                    {this.state.showSearchResults && this.state.showOrderDetails && !this.state.showRsaTokenValidation && this.renderSearchResultsContainer()}
+                    {!this.state.showRsaTokenValidation && this.state.showOrderPreview && (
+                        <div>
+                            <div className={`acss ${this.isDark ? ' remarks-header-align-dark' : ' remarks-header-align'}`}>
+                                <div className="remarks-header">
+                                    <Button onClick={() => this.handleViewData('orderPreview')} data-testid="validate">
+                                        Close Preview
+                                    </Button>
+                                </div>
+                                <span onClick={() => this.handleViewData('orderPreview')}>
+                                    <Icon name="close" color={this.isDark ? 'white' : 'black'} class="icon" size="extraLarge" />
+                                </span>
+                            </div>
+                            {this.props.remarkDetails && (
+                                <AcssGenericOrderPreview
+                                    showOnlyOrderPreviewTab
+                                    location={
+                                        (this.state.selectedRow > -1 && this.props?.order?.order?.[this.state.selectedRow]?.locationCode) ||
+                                        this.props?.order?.order?.[this.state.selectedRow]?.orderLocation ||
+                                        this.props?.order?.order?.[this.state.selectedRow]?.aceOrdLocationCode ||
+                                        this.state.uswinLocation
+                                    }
+                                    orderNumber={(this.state.selectedRow > -1 && this.props?.order?.order?.[this.state.selectedRow].orderNumber) || this.state.orderNumber}
+                                    searchType={this.state.searchBy}
+                                    handleOrderSearchPreview={() => {}}
+                                    selectedRow={this.state.selectedRow}
+                                    isDark={this.isDark}
+                                />
+                            )}
+                        </div>
+                    )}
+                    {this.state.showActivationStatusModal && (
+                        <ActivationStatusModal
+                            show={this.state.showActivationStatusModal}
+                            closeButton={(value) => {
+                                if (!value) this.setState({ showActivationStatusModal: false });
+                            }}
+                            locationCode={this.state?.uswinLocation || this.props.uswinLocation}
+                            orderNum={this.state.orderNumber}
+                            retrieveDetailedStatus={false}
+                            isDark={this.isDark}
+                        />
+                    )}
+                    {this.state.showPrebackOrderDetails && (
+                        <div className={this.isDark ? 'acss-dark-theme' : ''}>
+                            <div className="remarks-header-align acss">
+                                <div>Pre Order Details</div>
+                                <span onClick={() => this.handleViewData('preorderdetails')}>
+                                    <Icon name="close" color={this.isDark ? 'white' : 'black'} class="icon" size="extraLarge" />
+                                </span>
+                            </div>
+                            (
+                            <PreBackOrderPreview
+                                orderPreview={{
+                                    orderPreviewObj: this.props.prebackOrderDetails?.orderDetails || {},
+                                }}
+                                orderDetailsKey="Acss PreBack Order Details"
+                                featureList={this.props.prebackOrderDetails?.featurePlans || {}}
+                                channel={ACSS_ORDER_SEARCH_CHANNEL}
+                            />
+                            ){' '}
+                        </div>
+                    )}
+                </div>
+
+                <Modal
+                    ariaLabel="Modify Payment"
+                    className="lp-modal fullscreen modify-payment"
+                    opened={!!this.state.showModal}
+                    closeButton={
+                        <div className="closebtn-container preback">
+                            <Icon name="close" size={23} />
+                        </div>
+                    }
+                    onOpenedChange={(value) => {
+                        if (!value) {
+                            this.setState({ showModal: value });
+                        }
+                    }}>
+                    <ModalTitle>Decline offer</ModalTitle>
+                    <ModalTitle>Modify payment</ModalTitle>
+                    <ModalBody>
+                        <PrebackCancel
+                            searchType={this.state.searchBy}
+                            userId={this.props.userId}
+                            locationCode={this.props.userLocationCode}
+                            deviceId={deviceId}
+                            orderNum={orderNum}
+                            ordStatus={ordStatus}
+                            confirmationNum={this.state.confirmationNo ? this.state.confirmationNo : confNumVal}
+                            handleModalClose={this.handleModalClose}
+                        />
+                    </ModalBody>
+                </Modal>
+            </Suspense>
+        );
+    }
+}
+const mapStateToProps = createStructuredSelector({
+    prebackOrderDetails: getPrebackOrderDetails(),
+});
+
+export const mapDispatchToProps = (dispatch) => ({
+    getOrderDetailsRequest: (orderType, completeOrderPayload, readCartPayload) => dispatch(getOrderDetailsRequest(orderType, completeOrderPayload, readCartPayload)),
+    updatePreOrderCancelStatus: (payload) => dispatch(setCancelPrebackOrderSuccess(payload)),
+});
+
+const withConnect = connect(mapStateToProps, mapDispatchToProps);
+
+export default compose(withConnect)(AcssOrderSearch);
