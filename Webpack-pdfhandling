@@ -1,0 +1,71 @@
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.entry';
+
+// Set up worker source for Webpack
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
+
+
+
+
+
+_----------
+
+generateCanvasFromPDF = () => {
+  try {
+    const { src } = this.props;
+    const pdfData = src && typeof src === 'string' && atob(src.replace(/\s/g, ''));
+
+    if (!pdfData) {
+      this.props.onError();
+      return;
+    }
+
+    const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+
+    loadingTask.promise.then(
+      doc => {
+        this.setState({ doc, pages: doc.numPages });
+
+        for (let i = 1; i <= doc.numPages; i++) {
+          doc.getPage(i).then(page => {
+            const viewport = page.getViewport({ scale: 1.65 });
+            const canvasContainer = this.pdfCanvas.current;
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("2d");
+
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            if (canvas && canvasContainer) {
+              canvasContainer.appendChild(canvas);
+            }
+
+            const renderContext = {
+              canvasContext: ctx,
+              viewport: viewport
+            };
+
+            page.render(renderContext).promise.then(
+              () => console.log("Page rendered"),
+              error => {
+                console.error("Error rendering the PDF page", error);
+                this.props.onError();
+              }
+            );
+          }).catch(error => {
+            console.error("Error loading page:", error);
+            this.props.onError();
+          });
+        }
+      },
+      reason => {
+        console.error(`Error during ${this.props.src} loading: ${reason}`);
+        this.props.onError();
+      }
+    );
+  } catch (error) {
+    console.error('Fatal error while rendering pdf: ', error?.message);
+    this.props.onError();
+  }
+};
