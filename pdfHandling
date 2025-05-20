@@ -1,0 +1,53 @@
+generateCanvasFromPDF = () => {
+    try {
+      const { src } = this.props;
+      const pdfData = src && typeof src === 'string'  &&  atob(src);
+      let loadingTask = pdfData ? pdfjsLib.getDocument({ data: pdfData }) : "";
+      if (loadingTask) {
+        loadingTask.promise.then(
+          doc => {
+            this.setState({
+              doc: doc,
+              pages: doc.numPages
+            });
+      for (let i = 1; i <= doc.numPages; i++) {
+              doc.getPage(i).then(page => {
+                //   let scale = 1.65;
+                let viewport = page.getViewport({ scale: 1.65 });
+                let canvasContainer = this.pdfCanvas.current;
+                let canvas = document.createElement("canvas");
+                let ctx = canvas.getContext("2d");
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                canvas && 
+                canvasContainer && 
+                canvasContainer.appendChild(canvas);
+                let renderContext = {
+                  canvasContext: ctx,
+                  viewport: viewport
+                };
+                // Render PDF page into canvas context
+                let renderTask = page.render(renderContext);
+                renderTask.promise.then(function () {
+                  console.log("Page rendered");
+                },
+                error => {
+                  console.log("Error Renderign the PDF ",error);
+                  this.props.onError();
+                }
+                );
+              });
+            }
+          },
+          reason => {
+            this.props.onError();
+            console.error(`Error during ${this.props.src} loading: ${reason}`);
+          }
+        );
+      } else {
+        this.props.onError();
+      }
+    } catch (error) {
+      console.error('Fatal error while rendering pdf: ', error && error.message);
+    }   
+  }
