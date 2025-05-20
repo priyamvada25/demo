@@ -1,0 +1,83 @@
+import { pdfjs as pdfjsLib } from 'pdfjs-dist/legacy/build/pdf';
+
+// Set the PDF.js worker source once at the top level
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+generateCanvasFromPDF = () => {
+  try {
+    const { src, onError } = this.props;
+
+    // SAFER base64 decoding for iOS (atob fails silently for large PDFs)
+    const base64ToUint8Array = (base64) => {
+      const raw = atob(base64);
+      const uint8Array = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) {
+        uint8Array[i] = raw.charCodeAt(i);
+      }
+      return uint8Array;
+    };
+
+    const pdfData = src && typeof src === 'string' ? base64ToUint8Array(src) : null;
+
+    if (!pdfData) {
+      onError();
+      return;
+    }
+
+    const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+
+    loadingTask.promise.then((doc) => {
+      this.setState({
+        doc,
+        pages: doc.numPages,
+      });
+
+      const canvasContainer = this.pdfCanvas.current;
+      if (!canvasContainer) {
+        onError();
+        return;
+      }
+
+      // Clear existing canvases if re-rendering
+      canvasContainer.innerHTML = '';
+
+      for (let i = 1; i <= doc.numPages; i++) {
+        doc.getPage(i).then((page) => {
+          const scale = 1.2; // Lowered for iOS compatibility
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+
+          canvasContainer.appendChild(canvas);
+
+          const renderContext = {
+            canvasContext: ctx,
+            viewport,
+          };
+
+          page.render(renderContext).promise.then(
+            () => {
+              console.log(`Page ${i} rendered`);
+            },
+            (error) => {
+              console.error(`Error rendering page ${i}:`, error);
+              onError();
+            }
+          );
+        }).catch((err) => {
+          console.error(`Error getting page ${i}:`, err);
+          onError();
+        });
+      }
+    }).catch((reason) => {
+      console.error(`Error loading PDF: ${reason}`);
+      onError();
+    });
+  } catch (error) {
+    console.error('Fatal error while rendering PDF:', error.message);
+    this.props.onError();
+  }
+};
