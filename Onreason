@@ -1,0 +1,25 @@
+test('should handle error in loadingTask.promise (reason block)', async () => {
+  const errorMessage = 'Failed to load PDF';
+  const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const logToKibanaSpy = jest.spyOn(PDFView.prototype, 'logToKibana');
+
+  pdfjsLib.getDocument.mockReturnValueOnce({
+    promise: Promise.reject(errorMessage)
+  });
+
+  sessionStorage.setItem('channel', 'OMNI-INDIRECT');
+  sessionStorage.setItem('refundexchange', 'true');
+
+  render(<PDFView src="invalidSrc" isIpad={true} isQuote={true} />);
+
+  await waitFor(() => {
+    expect(consoleErrorSpy).toHaveBeenCalledWith(`Error loading pdf: ${errorMessage} [object Object]`);
+    expect(logToKibanaSpy).toHaveBeenCalledWith(
+      `Error loading pdf: ${errorMessage}`,
+      'generateCanvasFromPDF'
+    );
+  });
+
+  consoleErrorSpy.mockRestore();
+  logToKibanaSpy.mockRestore();
+});
