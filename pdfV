@@ -1,0 +1,152 @@
+import React from "react";
+import * as pdfjsLib from "pdfjs-dist/es5/build/pdf.js";
+import "./Agreements.css";
+import { kibanaLogger } from "../../../../src/utils/kibanaLogger"
+import PropTypes from "prop-types";
+
+class PDFView extends React.Component {
+  constructor(props) {
+    super(props);
+    this.pdfCanvas = React.createRef();
+    this.state = {
+      doc: "",
+      pages: 0
+    };
+  }
+  componentDidMount() {
+    this.generateCanvasFromPDF();
+  }
+
+  componentDidUpdate(prevProps) {
+    let channel = sessionStorage.getItem("channel");
+    const isRfex = sessionStorage.getItem("refundexchange");
+   
+    if(prevProps.src !== this.props.src) {
+
+      //Remove Previous Canvases if we get new pdf content src
+      this.removeAllChildNodes(); 
+     if((channel.includes("OMNI-INDIRECT") && isRfex && this.props.isIpad) || this.props.isQuote|| (channel.includes("OMNI-RETAIL") && this.props.isIpad )) {
+        this.generateCanvasFromPDF();
+      }   
+      document.getElementById("pdf").scrollTop = 0;
+    }
+  }
+
+
+   removeAllChildNodes = () => {
+    let canvasContainer = this.pdfCanvas.current;
+    while (canvasContainer.firstChild) {
+      canvasContainer.removeChild(canvasContainer.firstChild);
+    }
+  }
+  logToKibana(logMessage, method) {
+    const channelPrefix = sessionStorage.getItem("channel") ? sessionStorage.getItem("channel") + " - " : "";
+    const log = {
+        messageType: "INFO",
+        eventType: "FeInfo",
+        pageUrl: window.location.href,
+        serviceUrl: "",
+        method: method,
+        errorMessage: "",
+        cookie: "",
+        loggerMessage: {
+            message: channelPrefix + logMessage,
+            loglevel: "",
+            //serverDuration: error.duration ? error.duration : 0,
+            responseDuration: 0,
+            //networkDuration: networkDuration,
+            userAgent: navigator.userAgent,
+            pageTitle: document.title,
+            host: window.location.host,
+            stackTrace: "",
+        },
+    };
+    kibanaLogger(log);
+  }
+
+ 
+  generateCanvasFromPDF = () => {
+    try {
+      const { src } = this.props;
+      const pdfData = src && typeof src === 'string'  &&  atob(src);
+      //const pdfIssueFFlag =  JSON.parse(sessionStorage.getItem("APP_PROPERTIES"))?.pdfIssueFFlag === "TRUE" ? true : false;
+      const pdfIssueFFlag =  true;
+      let loadingTask = pdfData ? pdfjsLib.getDocument({ data: pdfData }) : "";
+      console.error(`Loading task created: ${loadingTask}`);
+      if (loadingTask) {
+        loadingTask.promise.then(
+          doc => {
+            this.setState({
+              doc: doc,
+              pages: doc.numPages
+            });
+  
+            //Iterate through all pdf Pages
+            for (let i = 1; i <= doc.numPages; i++) {
+              doc.getPage(i).then(page => {
+                //   let scale = 1.65;
+                let viewport = page.getViewport({ scale: 1.65 });
+                let canvasContainer = this.pdfCanvas.current;
+                let canvas = document.createElement("canvas");
+                let ctx = canvas.getContext("2d");
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                canvas && 
+                canvasContainer && 
+                canvasContainer.appendChild(canvas);
+                let renderContext = {
+                  canvasContext: ctx,
+                  viewport: viewport
+                };
+                // Render PDF page into canvas context
+                let renderTask = page.render(renderContext);
+                renderTask.promise.then(function () {
+                  console.log("Page rendered");
+                },
+                error => {
+                  if(pdfIssueFFlag){
+                  console.error("Error Rendering the PDF ",error);
+                  this.logToKibana(`Error Rendering the PDF ${error}`,"generateCanvasFromPDF")
+                 // this.props.onError();
+                  }
+                  else{
+                  console.log("Error Renderign the PDF ",error);
+                //  this.props.onError();
+                  }
+                  
+                }
+                );
+              });
+            }
+          },
+          reason => {
+           // if(pdfIssueFFlag){
+              console.error(`Error loading pdf: ${reason} ${loadingTask}`);
+              this.logToKibana(`Error loading pdf: ${reason}`, "generateCanvasFromPDF");
+            //  this.props.onError();
+           // }
+          //  else{
+            //  this.props.onError();
+            console.error(`Error loading pdf: ${reason} ${loadingTask}`);
+          //  }
+            
+             
+          }
+        );
+      } else {
+      // this.props.onError();
+      }
+    } catch (error) {
+      console.error('Fatal error while rendering pdf: ', error && error.message);
+    }   
+  }
+
+  render() { 
+    return <div ref={this.pdfCanvas} onScroll = {this.props.onScroll} id="pdf" className={this.props.viewOnlyFlag ? "pdfViewQuote" : "pdfFrameIpad"} data-testid="pdf-view"></div>;
+  }
+}
+PDFView.propTypes = {
+  src: PropTypes.any
+};
+
+export default PDFView;
