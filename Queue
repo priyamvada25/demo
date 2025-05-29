@@ -1,0 +1,35 @@
+function* handleQueueFloor(action) {
+    try {
+        const userProfile = yield select(makeSelectUserProfileData());
+        const { timeZoneOffset = 0, orderLocation } = userProfile || {};
+
+        // adding offset for everycall
+        action.request['time_zone_offset'] = timeZoneOffset;
+        action.request['location'] = orderLocation;
+        if (isIpad()) {
+            if (isEmpty(action.request.location)) {
+                console.log('act', action, userProfile);
+            }
+        }
+        if (isEmpty(action.request?.location)) {
+            action.request['location'] = sessionStorage.getItem('location');
+        }
+
+        const { data, errors } = yield call(createSOECall(showCustomerCheckinEndpoint, action.request));
+        let error = errors?.[0] || null;
+        if (error) {
+            yield put(setError(error));
+        } else {
+            yield put(setQueueFloor(data?.customers || {}));
+        }
+    } catch (e) {
+        e.name = COMPONENT.QUEUE;
+        yield all([put(setError(e.message)), logger.logJsErrorToServer(e)]);
+    }
+}
+
+
+export default function* watchOrderLoads() {
+    yield takeLatest(FLOOR.FLOOR_LOAD, handleQueueFloor);
+    yield takeLatest(FLOOR.FLOOR_REFRESH_LOAD, handleQueueFloor);
+}
