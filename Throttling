@@ -1,0 +1,49 @@
+const axios = require('axios');
+
+let lastFailedTime = 0;
+let failureCount = 0;
+const THROTTLE_INTERVAL = 10000; // 10 seconds
+const MAX_RETRIES = 5;
+const ERROR_LOG_WINDOW = 10000; // 10 seconds
+let lastLoggedErrorTime = 0;
+
+async function callApiWithThrottling() {
+  const now = Date.now();
+
+  // Throttle API if last failure was recent
+  if (now - lastFailedTime < THROTTLE_INTERVAL) {
+    console.log('Skipping API call due to recent failure.');
+    return;
+  }
+
+  try {
+    const response = await axios.get('https://example.com/api');
+    console.log('API Success:', response.data);
+    failureCount = 0; // Reset on success
+  } catch (error) {
+    const status = error.response?.status;
+
+    if (status === 500) {
+      lastFailedTime = now;
+      failureCount++;
+
+      // Log the error only if last one was long ago
+      if (now - lastLoggedErrorTime > ERROR_LOG_WINDOW) {
+        console.error(`API failed with 500. Failure count: ${failureCount}`);
+        lastLoggedErrorTime = now;
+      }
+
+      // Optional: Stop calling API after repeated failures
+      if (failureCount >= MAX_RETRIES) {
+        console.error('Too many failures, stopping further calls temporarily.');
+        // You could activate a circuit breaker here
+      }
+    } else {
+      // Log other errors
+      console.error('Non-500 API error:', error.message);
+    }
+  }
+}
+
+// Simulate calling every 3 seconds
+setInterval(callApiWithThrottling, 3000);
