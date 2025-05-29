@@ -1,0 +1,60 @@
+let lastFailedTime = 0;
+let lastLoggedErrorTime = 0;
+const THROTTLE_INTERVAL = 10000; // 10 seconds
+const ERROR_LOG_INTERVAL = 10000;
+
+function* handleQueueFloor(action) {
+    try {
+        const now = Date.now();
+
+        // Throttle if last failure was too recent
+        if (now - lastFailedTime < THROTTLE_INTERVAL) {
+            console.log('Skipping API call due to recent 500 error.');
+            return;
+        }
+
+        const userProfile = yield select(makeSelectUserProfileData());
+        const { timeZoneOffset = 0, orderLocation } = userProfile || {};
+
+        action.request['time_zone_offset'] = timeZoneOffset;
+        action.request['location'] = orderLocation;
+        if (isIpad() && isEmpty(action.request.location)) {
+            console.log('act', action, userProfile);
+        }
+        if (isEmpty(action.request?.location)) {
+            action.request['location'] = sessionStorage.getItem('location');
+        }
+
+        const { data, errors } = yield call(createSOECall(showCustomerCheckinEndpoint, action.request));
+        let error = errors?.[0] || null;
+
+        if (error) {
+            // Throttle on 500
+            if (error.status === 500) {
+                lastFailedTime = now;
+
+                if (now - lastLoggedErrorTime > ERROR_LOG_INTERVAL) {
+                    yield put(setError(error));
+                    yield call(logger.logJsErrorToServer, error);
+                    lastLoggedErrorTime = now;
+                } else {
+                    console.log('Suppressed 500 error log due to log throttling.');
+                }
+            } else {
+                // Handle non-500 errors normally
+                yield put(setError(error));
+                yield call(logger.logJsErrorToServer, error);
+            }
+        } else {
+            yield put(setQueueFloor(data?.customers || {}));
+        }
+    } catch (e) {
+        e.name = COMPONENT.QUEUE;
+
+        // Handle other unexpected exceptions
+        yield all([
+            put(setError(e.message)),
+            call(logger.logJsErrorToServer, e)
+        ]);
+    }
+}
